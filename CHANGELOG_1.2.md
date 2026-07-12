@@ -1,4 +1,4 @@
-# DLG Editor for Disciples — версия 1.2
+# DLG Editor for Disciples - Новое в версии 1.2
 
 ## Русский
 
