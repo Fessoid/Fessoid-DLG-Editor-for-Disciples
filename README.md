@@ -3,11 +3,15 @@
 **Interface editor for Disciples 1 and 2**
   
   
-[![Скачать](https://img.shields.io/github/v/release/Fessoid/DLG-Editor-for-Disciples?color=orange)](https://github.com/Fessoid/DLG-Editor-for-Disciples/releases)
+[![Скачать](https://img.shields.io/github/v/release/Fessoid/DLG-Editor-for-Disciples?color=orange)](https://github.com/Fessoid/DLG-Editor-for-Disciples/releases)  
+[Патчноут/Changelog/Dziennik zmian/更新日志](https://github.com/Fessoid/DLG-Editor-for-Disciples/blob/main/CHANGELOG.md)
 
 Разработал программу для самостоятельного изменения интерфейса игр Disciples (1 и 2 части).  
-Редактирует dlg-файлы интерфейса как для Оригинальной игры, так и любых модов.  
-Основная фишка - акцент на редактировании текстовых полей и размеров полей, окон и кнопок.
+
+Редактирует dlg-файлы интерфейса как для Оригинальной игры, так и любых модов (папка Interf).  
+Основная фишка - акцент на редактировании текстов и размеров полей, окон и кнопок.  
+
+Так же редактирует размещение иконок зданий на Главном экране Столицы (файл Capital.dat в папке Imgs)
 
 VIDEO 
 [YouTube](https://youtu.be/MfSSoe-kNx4)/[Boosty](https://boosty.to/fessoid/posts/a86bc6a9-8427-40c7-8787-47226955f194?share=post_link&utm_source=github)
@@ -221,8 +225,8 @@ VIDEO
 
   
 **Interf.dlg**  
-<img width="1365" height="730" alt="image" src="https://github.com/user-attachments/assets/32f3ee63-6acc-47b2-9036-d71ded644995" />
+<img width="1365" height="728" alt="image" src="https://github.com/user-attachments/assets/1b94a6f6-0458-412e-9da6-01e23dae91f1" />
 
   
-**О программе**
-<img width="395" height="427" alt="image" src="https://github.com/user-attachments/assets/ebb249ee-bc84-442b-8365-a8a4d60f4452" />
+**О программе**  
+<img width="395" height="497" alt="image" src="https://github.com/user-attachments/assets/b08ea5c3-0be1-42d5-b31f-e457559734cc" />
