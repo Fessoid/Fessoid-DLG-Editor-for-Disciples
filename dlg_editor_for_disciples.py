@@ -1,25 +1,53 @@
 """
-DLG Editor for Disciples by Fessoid — визуальный редактор .dlg файлов.
+DLG Editor for Disciples by Fessoid — визуальный редактор .dlg и Capital.dat.
 
 Запуск:
-    python dlg_editor.py [путь_к_файлу.dlg]
+    python dlg_editor_for_disciples.py [путь_к_файлу.dlg|.dat]
+
+Сборка:
+    pyinstaller --onefile --windowed --name "DLG Editor for Disciples" dlg_editor_for_disciples.py
 """
 
 import configparser
 import os
 import re
+import subprocess
 import sys
 import webbrowser
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, PhotoImage
+from tkinter import filedialog, messagebox, ttk
 
-# Название программы — единственное место, где оно задаётся.
-APP_TITLE = "DLG Editor for Disciples"
+# Название и версия программы — единственное место, где они задаются.
+APP_T = "DLG Editor for Disciples by Fessoid v"
+APP_VERSION = "1.2"
+APP_TITLE = APP_T + APP_VERSION
 
 # Путь к файлу настроек — лежит рядом с exe / скриптом.
 SETTINGS_PATH = os.path.join(
     os.path.dirname(os.path.abspath(sys.argv[0])), "DLG_Editor_settings.ini"
 )
+
+# Режимы работы редактора.
+MODE_DLG = "dlg"
+MODE_DAT = "dat"
+
+# --- Горячие клавиши независимо от раскладки ---------------------------------
+# При русской раскладке event.keysym приходит кириллическим ("Cyrillic_ya" и
+# т.п.), поэтому привязки вида <Control-z> не срабатывают. Физическую клавишу
+# определяем по event.keycode: на Windows это виртуальный код клавиши (VK),
+# он от раскладки не зависит. Для Linux/X11 держим отдельную таблицу.
+VK_KEYCODES = {67: "c", 72: "h", 79: "o", 83: "s", 89: "y", 90: "z"}
+X11_KEYCODES = {54: "c", 43: "h", 32: "o", 39: "s", 29: "y", 52: "z"}
+
+
+def key_letter(event):
+    """Латинская буква нажатой клавиши независимо от раскладки (или None)."""
+    ks = event.keysym
+    if len(ks) == 1 and ks.isascii() and ks.isalpha():
+        return ks.lower()
+    if sys.platform.startswith("win"):
+        return VK_KEYCODES.get(event.keycode)
+    return X11_KEYCODES.get(event.keycode)
 
 # =============================================================================
 # ЛОКАЛИЗАЦИЯ — все строки программы.
@@ -46,6 +74,12 @@ STRINGS = {
         "menu_save":             "Сохранить",
         "menu_save_as":          "Сохранить как...",
         "menu_exit":             "Выход",
+        "menu_edit":             "Правка",
+        "menu_undo":             "Отменить действие",
+        "menu_redo":             "Вернуть действие",
+        "menu_history":          "История изменений...",
+        "menu_settings":         "Настройки",
+        "menu_dat_secondary":    "Изменять вторичные координаты в .dat",
         "menu_language":         "Язык",
         "menu_lang_ru":          "Русский",
         "menu_lang_en":          "English",
@@ -55,14 +89,17 @@ STRINGS = {
 
         # --- Левая панель ---
         "sections_label":        "Секции DIALOG:",
+        "sections_label_dat":    "Секции (расы):",
 
         # --- Статус ---
-        "status_open_hint":      "Откройте .dlg файл (Ctrl+O)",
+        "status_open_hint":      "Откройте .dlg или Capital.dat (Ctrl+O)",
         "status_loaded":         "Загружено: {fname} — секций: {count}",
+        "status_loaded_dat":     "Загружено: {fname} — рас: {count}, слоёв: {layers}",
         "status_saved":          "Сохранено: {path}",
 
         # --- Правая панель ---
         "elements_label":        "Элементы:",
+        "elements_label_dat":    "Слои (здания):",
         "dialog_size_label":     "Размер окна DIALOG",
         "coord_label":           "Координаты выбранного элемента",
         "hints_label":           "Подсказки",
@@ -72,7 +109,23 @@ STRINGS = {
             "• Тянуть за край/угол — изменить размер\n"
             "• Тянуть правый/нижний край окна —\n"
             "  менять размер DIALOG\n"
-            "• Ctrl+S — сохранить файл"
+            "• Ctrl+S — сохранить, Ctrl+Z — отменить\n"
+            "• Ctrl+H — история изменений\n"
+            "• Двойной клик в «Истории изменений» —\n"
+            "  вернуться к выбранной правке\n"
+            "• Ctrl+C — копировать имя секции"
+        ),
+        "hint_text_dat": (
+            "• Клик по слою — выделить\n"
+            "• Тянуть за центр — переместить\n"
+            "• Тянуть за край/угол — изменить размер\n"
+            "• Добавить / Изменить / Удалить —\n"
+            "  работа со слоями зданий\n"
+            "• Ctrl+S — сохранить, Ctrl+Z — отменить\n"
+            "• Ctrl+H — история изменений\n"
+            "• Двойной клик в «Истории изменений» —\n"
+            "  вернуться к выбранной правке\n"
+            "• Ctrl+C — копировать имя секции"
         ),
         "dlg_size_fixed":        "X1, Y1 = 0 (фиксировано)",
         "dlg_size_warn":         "Внимание: вторая пара = {w}×{h}, "
@@ -81,28 +134,73 @@ STRINGS = {
         # --- Кнопки ---
         "btn_save":              "Сохранить",
         "btn_revert":            "Отменить",
+        "btn_history":           "История",
+        "btn_open_external":     "Открыть файл в блокноте",
+        "btn_open_external_tip": "Открыть текущий файл текстовым редактором",
+        "btn_add":               "Добавить",
+        "btn_edit":              "Изменить",
+        "btn_delete":            "Удалить",
+        "btn_ok":                "ОК",
+        "btn_cancel":            "Отмена",
+        "btn_close":             "Закрыть",
+        "btn_copy":              "Копировать",
 
         # --- Диалоги ---
         "err_read_title":        "Ошибка чтения",
         "err_read_msg":          "Не удалось прочитать файл:\n{err}",
         "err_write_title":       "Ошибка записи",
         "err_write_msg":         "Не удалось сохранить:\n{err}",
+        "err_open_title":        "Ошибка открытия",
+        "err_open_msg":          "Не удалось открыть файл во внешней программе:\n{err}",
         "unsaved_title":         "Несохранённые изменения",
         "unsaved_msg":           "В файле есть несохранённые изменения.\n"
                                  "Сохранить перед продолжением?",
 
+        # --- История ---
+        "hist_title":            "История изменений",
+        "hist_initial":          "— исходное состояние файла —",
+        "hist_revert_to":        "Откатиться к выбранному состоянию",
+        "hist_current_mark":     "►",
+        "hist_col_sec":          "Секция",
+        "hist_col_param":        "Параметр",
+        "hist_col_before":       "Было",
+        "hist_col_after":        "Стало",
+        "hist_param_dlgsize":    "Размер окна DIALOG",
+        "hist_none":             "—",
+
+        # --- Редактор слоя Capital.dat ---
+        "layer_add_title":       "Новый слой",
+        "layer_edit_title":      "Изменение слоя",
+        "fld_z":                 "Z-order (номер LAYER)",
+        "fld_build":             "ID здания (Gbuild)",
+        "fld_image":             "Имя изображения (Capital.ff)",
+        "fld_coords":            "Координаты X1, Y1, X2, Y2",
+        "fld_extra":             "Прочие поля (через запятую)",
+        "fld_layerinfo":         "Создать запись LAYERINFO для этого здания",
+        "err_layer_title":       "Некорректные данные",
+        "err_layer_z":           "Z-order должен быть целым числом.",
+        "err_layer_dup":         "Слой с номером {z} уже существует в этой секции.",
+        "err_layer_coords":      "Координаты должны быть целыми числами.",
+        "del_title":             "Удаление слоя",
+        "del_msg":               "Удалить слой {name} ({image})?\n"
+                                 "Действие можно отменить через Ctrl+Z.",
+        "del_layerinfo":         "Также удалить запись LAYERINFO для {build}",
+        "no_selection":          "Слой не выбран.",
+
         # --- О программе ---
         "about_title":           "О программе",
-        "about_name":            APP_TITLE + " by Fessoid",
-        "about_version":         "версия 1.1",
+        "about_name":            APP_TITLE,
+        "about_version":         "версия " + APP_VERSION,
         "about_text": (
-            "Визуальный редактор .dlg файлов для интерактивного\n"
-            "изменения размеров и положения элементов интерфейса.\n"
-            "Позволяет открыть файл, выбрать секцию DIALOG из\n"
-            "списка, увидеть все элементы на холсте, перетаскивать\n"
-            "и менять размеры мышью или вводить координаты вручную,\n"
-            "после чего сохранить изменения обратно в файл\n"
-            "с сохранением исходного синтаксиса."
+            "Визуальный редактор файлов интерфейса Disciples.\n\n"
+            "Режим .dlg: изменение размеров и положения элементов\n"
+            "интерфейса мышью или вводом координат вручную.\n\n"
+            "Режим Capital.dat: добавление, изменение и удаление\n"
+            "слоёв зданий на главном экране столицы (общий вид\n"
+            "города, а не ветки развития юнитов) с визуальным\n"
+            "размещением.\n\n"
+            "Изменения сохраняются обратно в файл с сохранением\n"
+            "исходного синтаксиса."
         ),
     },
     "en": {
@@ -112,6 +210,12 @@ STRINGS = {
         "menu_save":             "Save",
         "menu_save_as":          "Save As...",
         "menu_exit":             "Exit",
+        "menu_edit":             "Edit",
+        "menu_undo":             "Undo",
+        "menu_redo":             "Redo",
+        "menu_history":          "Change History...",
+        "menu_settings":         "Settings",
+        "menu_dat_secondary":    "Update secondary coordinates in .dat",
         "menu_language":         "Language",
         "menu_lang_ru":          "Русский",
         "menu_lang_en":          "English",
@@ -121,14 +225,17 @@ STRINGS = {
 
         # --- Left panel ---
         "sections_label":        "DIALOG Sections:",
+        "sections_label_dat":    "Sections (races):",
 
         # --- Status ---
-        "status_open_hint":      "Open a .dlg file (Ctrl+O)",
+        "status_open_hint":      "Open a .dlg file or Capital.dat (Ctrl+O)",
         "status_loaded":         "Loaded: {fname} — sections: {count}",
+        "status_loaded_dat":     "Loaded: {fname} — races: {count}, layers: {layers}",
         "status_saved":          "Saved: {path}",
 
         # --- Right panel ---
         "elements_label":        "Elements:",
+        "elements_label_dat":    "Layers (buildings):",
         "dialog_size_label":     "DIALOG Window Size",
         "coord_label":           "Selected Element Coordinates",
         "hints_label":           "Tips",
@@ -138,7 +245,23 @@ STRINGS = {
             "• Drag edge/corner to resize\n"
             "• Drag right/bottom edge of window\n"
             "  to resize DIALOG\n"
-            "• Ctrl+S to save file"
+            "• Ctrl+S to save, Ctrl+Z to undo\n"
+            "• Ctrl+H opens the change history\n"
+            "• Double-click in the Change History —\n"
+            "  revert to the selected edit\n"
+            "• Ctrl+C copies the section name"
+        ),
+        "hint_text_dat": (
+            "• Click a layer to select it\n"
+            "• Drag from center to move\n"
+            "• Drag edge/corner to resize\n"
+            "• Add / Edit / Delete —\n"
+            "  manage building layers\n"
+            "• Ctrl+S to save, Ctrl+Z to undo\n"
+            "• Ctrl+H opens the change history\n"
+            "• Double-click in the Change History —\n"
+            "  revert to the selected edit\n"
+            "• Ctrl+C copies the section name"
         ),
         "dlg_size_fixed":        "X1, Y1 = 0 (fixed)",
         "dlg_size_warn":         "Warning: second pair = {w}×{h}, "
@@ -147,28 +270,72 @@ STRINGS = {
         # --- Buttons ---
         "btn_save":              "Save",
         "btn_revert":            "Revert",
+        "btn_history":           "History",
+        "btn_open_external":     "Open file in Notepad",
+        "btn_open_external_tip": "Open the current file in a text editor",
+        "btn_add":               "Add",
+        "btn_edit":              "Edit",
+        "btn_delete":            "Delete",
+        "btn_ok":                "OK",
+        "btn_cancel":            "Cancel",
+        "btn_close":             "Close",
+        "btn_copy":              "Copy",
 
         # --- Dialogs ---
         "err_read_title":        "Read Error",
         "err_read_msg":          "Could not read file:\n{err}",
         "err_write_title":       "Write Error",
         "err_write_msg":         "Could not save file:\n{err}",
+        "err_open_title":        "Open Error",
+        "err_open_msg":          "Could not open the file externally:\n{err}",
         "unsaved_title":         "Unsaved Changes",
         "unsaved_msg":           "There are unsaved changes.\n"
                                  "Save before continuing?",
 
+        # --- History ---
+        "hist_title":            "Change History",
+        "hist_initial":          "— initial file state —",
+        "hist_revert_to":        "Revert to selected state",
+        "hist_current_mark":     "►",
+        "hist_col_sec":          "Section",
+        "hist_col_param":        "Parameter",
+        "hist_col_before":       "Before",
+        "hist_col_after":        "After",
+        "hist_param_dlgsize":    "DIALOG window size",
+        "hist_none":             "—",
+
+        # --- Capital.dat layer editor ---
+        "layer_add_title":       "New Layer",
+        "layer_edit_title":      "Edit Layer",
+        "fld_z":                 "Z-order (LAYER number)",
+        "fld_build":             "Building ID (Gbuild)",
+        "fld_image":             "Image name (Capital.ff)",
+        "fld_coords":            "Coordinates X1, Y1, X2, Y2",
+        "fld_extra":             "Other fields (comma separated)",
+        "fld_layerinfo":         "Create a LAYERINFO entry for this building",
+        "err_layer_title":       "Invalid Data",
+        "err_layer_z":           "Z-order must be an integer.",
+        "err_layer_dup":         "A layer numbered {z} already exists in this section.",
+        "err_layer_coords":      "Coordinates must be integers.",
+        "del_title":             "Delete Layer",
+        "del_msg":               "Delete layer {name} ({image})?\n"
+                                 "This can be undone with Ctrl+Z.",
+        "del_layerinfo":         "Also delete the LAYERINFO entry for {build}",
+        "no_selection":          "No layer selected.",
+
         # --- About ---
         "about_title":           "About",
-        "about_name":            APP_TITLE + " by Fessoid",
-        "about_version":         "version 1.1",
+        "about_name":            APP_TITLE,
+        "about_version":         "version " + APP_VERSION,
         "about_text": (
-            "A visual editor for .dlg files that lets you\n"
-            "interactively change positions and sizes of\n"
-            "interface elements. Open a file, pick a DIALOG\n"
-            "section from the list, see all elements on the\n"
-            "canvas, drag and resize them or type coordinates\n"
-            "manually, then save changes back to the file\n"
-            "preserving the original syntax."
+            "A visual editor for Disciples interface files.\n\n"
+            ".dlg mode: change sizes and positions of interface\n"
+            "elements with the mouse or by typing coordinates.\n\n"
+            "Capital.dat mode: add, edit and delete building\n"
+            "layers on the capital's main screen (the city view,\n"
+            "not the unit branch dialogs) with visual placement.\n\n"
+            "Changes are written back to the file preserving\n"
+            "the original syntax."
         ),
     },
     "pl": {
@@ -178,6 +345,12 @@ STRINGS = {
         "menu_save":             "Zapisz",
         "menu_save_as":          "Zapisz jako...",
         "menu_exit":             "Wyjście",
+        "menu_edit":             "Edycja",
+        "menu_undo":             "Cofnij działanie",
+        "menu_redo":             "Ponów działanie",
+        "menu_history":          "Historia zmian...",
+        "menu_settings":         "Ustawienia",
+        "menu_dat_secondary":    "Zmieniaj wtórne współrzędne w .dat",
         "menu_language":         "Język",
         "menu_lang_ru":          "Русский",
         "menu_lang_en":          "English",
@@ -187,14 +360,17 @@ STRINGS = {
 
         # --- Left panel ---
         "sections_label":        "Sekcje DIALOG:",
+        "sections_label_dat":    "Sekcje (rasy):",
 
         # --- Status ---
-        "status_open_hint":      "Otwórz plik .dlg (Ctrl+O)",
+        "status_open_hint":      "Otwórz plik .dlg lub Capital.dat (Ctrl+O)",
         "status_loaded":         "Wczytano: {fname} — sekcji: {count}",
+        "status_loaded_dat":     "Wczytano: {fname} — ras: {count}, warstw: {layers}",
         "status_saved":          "Zapisano: {path}",
 
         # --- Right panel ---
         "elements_label":        "Elementy:",
+        "elements_label_dat":    "Warstwy (budynki):",
         "dialog_size_label":     "Rozmiar okna DIALOG",
         "coord_label":           "Współrzędne wybranego elementu",
         "hints_label":           "Wskazówki",
@@ -204,7 +380,23 @@ STRINGS = {
             "• Przeciągnij krawędź/róg, aby zmienić rozmiar\n"
             "• Przeciągnij prawą/dolną krawędź okna,\n"
             "  aby zmienić rozmiar DIALOG\n"
-            "• Ctrl+S — zapisz plik"
+            "• Ctrl+S — zapisz, Ctrl+Z — cofnij\n"
+            "• Ctrl+H — historia zmian\n"
+            "• Podwójne kliknięcie w „Historii zmian” —\n"
+            "  powrót do wybranej zmiany\n"
+            "• Ctrl+C — kopiuj nazwę sekcji"
+        ),
+        "hint_text_dat": (
+            "• Kliknij warstwę, aby ją wybrać\n"
+            "• Przeciągnij ze środka, aby przesunąć\n"
+            "• Przeciągnij krawędź/róg, aby zmienić rozmiar\n"
+            "• Dodaj / Zmień / Usuń —\n"
+            "  zarządzanie warstwami budynków\n"
+            "• Ctrl+S — zapisz, Ctrl+Z — cofnij\n"
+            "• Ctrl+H — historia zmian\n"
+            "• Podwójne kliknięcie w „Historii zmian” —\n"
+            "  powrót do wybranej zmiany\n"
+            "• Ctrl+C — kopiuj nazwę sekcji"
         ),
         "dlg_size_fixed":        "X1, Y1 = 0 (stałe)",
         "dlg_size_warn":         "Uwaga: druga para = {w}×{h}, "
@@ -213,28 +405,72 @@ STRINGS = {
         # --- Buttons ---
         "btn_save":              "Zapisz",
         "btn_revert":            "Cofnij",
+        "btn_history":           "Historia",
+        "btn_open_external":     "Otwórz plik w Notatniku",
+        "btn_open_external_tip": "Otwórz bieżący plik w edytorze tekstu",
+        "btn_add":               "Dodaj",
+        "btn_edit":              "Zmień",
+        "btn_delete":            "Usuń",
+        "btn_ok":                "OK",
+        "btn_cancel":            "Anuluj",
+        "btn_close":             "Zamknij",
+        "btn_copy":              "Kopiuj",
 
         # --- Dialogs ---
         "err_read_title":        "Błąd odczytu",
         "err_read_msg":          "Nie udało się odczytać pliku:\n{err}",
         "err_write_title":       "Błąd zapisu",
         "err_write_msg":         "Nie udało się zapisać pliku:\n{err}",
+        "err_open_title":        "Błąd otwarcia",
+        "err_open_msg":          "Nie udało się otworzyć pliku zewnętrznie:\n{err}",
         "unsaved_title":         "Niezapisane zmiany",
         "unsaved_msg":           "Plik zawiera niezapisane zmiany.\n"
                                  "Zapisać przed kontynuacją?",
 
+        # --- History ---
+        "hist_title":            "Historia zmian",
+        "hist_initial":          "— stan początkowy pliku —",
+        "hist_revert_to":        "Przywróć wybrany stan",
+        "hist_current_mark":     "►",
+        "hist_col_sec":          "Sekcja",
+        "hist_col_param":        "Parametr",
+        "hist_col_before":       "Było",
+        "hist_col_after":        "Jest",
+        "hist_param_dlgsize":    "Rozmiar okna DIALOG",
+        "hist_none":             "—",
+
+        # --- Capital.dat ---
+        "layer_add_title":       "Nowa warstwa",
+        "layer_edit_title":      "Edycja warstwy",
+        "fld_z":                 "Z-order (numer LAYER)",
+        "fld_build":             "ID budynku (Gbuild)",
+        "fld_image":             "Nazwa obrazu (Capital.ff)",
+        "fld_coords":            "Współrzędne X1, Y1, X2, Y2",
+        "fld_extra":             "Pozostałe pola (po przecinku)",
+        "fld_layerinfo":         "Utwórz wpis LAYERINFO dla tego budynku",
+        "err_layer_title":       "Nieprawidłowe dane",
+        "err_layer_z":           "Z-order musi być liczbą całkowitą.",
+        "err_layer_dup":         "Warstwa o numerze {z} już istnieje w tej sekcji.",
+        "err_layer_coords":      "Współrzędne muszą być liczbami całkowitymi.",
+        "del_title":             "Usuwanie warstwy",
+        "del_msg":               "Usunąć warstwę {name} ({image})?\n"
+                                 "Można to cofnąć przez Ctrl+Z.",
+        "del_layerinfo":         "Usuń także wpis LAYERINFO dla {build}",
+        "no_selection":          "Nie wybrano warstwy.",
+
         # --- About ---
         "about_title":           "O programie",
-        "about_name":            APP_TITLE + " by Fessoid",
-        "about_version":         "wersja 1.1",
+        "about_name":            APP_TITLE,
+        "about_version":         "wersja " + APP_VERSION,
         "about_text": (
-            "Edytor wizualny plików .dlg do interaktywnej\n"
-            "zmiany rozmiarów i pozycji elementów interfejsu.\n"
-            "Otwórz plik, wybierz sekcję DIALOG z listy,\n"
-            "zobacz elementy na płótnie, przeciągaj i zmieniaj\n"
-            "rozmiary myszą lub wpisuj współrzędne ręcznie,\n"
-            "a następnie zapisz zmiany z zachowaniem\n"
-            "oryginalnej składni."
+            "Edytor wizualny plików interfejsu Disciples.\n\n"
+            "Tryb .dlg: zmiana rozmiarów i pozycji elementów\n"
+            "interfejsu myszą lub przez wpisanie współrzędnych.\n\n"
+            "Tryb Capital.dat: dodawanie, zmiana i usuwanie warstw\n"
+            "budynków na głównym ekranie stolicy (widok miasta,\n"
+            "a nie gałęzie rozwoju jednostek) z wizualnym\n"
+            "rozmieszczeniem.\n\n"
+            "Zmiany są zapisywane z zachowaniem oryginalnej składni."
         ),
     },
     "zh": {
@@ -244,6 +480,12 @@ STRINGS = {
         "menu_save":             "保存",
         "menu_save_as":          "另存为...",
         "menu_exit":             "退出",
+        "menu_edit":             "编辑",
+        "menu_undo":             "撤销操作",
+        "menu_redo":             "重做操作",
+        "menu_history":          "修改历史...",
+        "menu_settings":         "设置",
+        "menu_dat_secondary":    "修改 .dat 中的次要坐标",
         "menu_language":         "语言",
         "menu_lang_ru":          "Русский",
         "menu_lang_en":          "English",
@@ -253,14 +495,17 @@ STRINGS = {
 
         # --- 左面板 ---
         "sections_label":        "DIALOG 区段：",
+        "sections_label_dat":    "区段（种族）：",
 
         # --- 状态 ---
-        "status_open_hint":      "请打开 .dlg 文件（Ctrl+O）",
+        "status_open_hint":      "请打开 .dlg 或 Capital.dat（Ctrl+O）",
         "status_loaded":         "已加载：{fname} — 区段数：{count}",
+        "status_loaded_dat":     "已加载：{fname} — 种族：{count}，图层：{layers}",
         "status_saved":          "已保存：{path}",
 
         # --- 右面板 ---
         "elements_label":        "元素：",
+        "elements_label_dat":    "图层（建筑）：",
         "dialog_size_label":     "DIALOG 窗口尺寸",
         "coord_label":           "所选元素坐标",
         "hints_label":           "提示",
@@ -270,7 +515,23 @@ STRINGS = {
             "• 拖动边缘/角以调整大小\n"
             "• 拖动窗口的右/下边缘\n"
             "  以调整 DIALOG 大小\n"
-            "• Ctrl+S 保存文件"
+            "• Ctrl+S 保存，Ctrl+Z 撤销\n"
+            "• Ctrl+H 修改历史\n"
+            "• 在「修改历史」中双击 —\n"
+            "  回到所选的修改\n"
+            "• Ctrl+C 复制区段名称"
+        ),
+        "hint_text_dat": (
+            "• 单击图层以选中\n"
+            "• 从中心拖动以移动\n"
+            "• 拖动边缘/角以调整大小\n"
+            "• 添加 / 修改 / 删除 —\n"
+            "  管理建筑图层\n"
+            "• Ctrl+S 保存，Ctrl+Z 撤销\n"
+            "• Ctrl+H 修改历史\n"
+            "• 在「修改历史」中双击 —\n"
+            "  回到所选的修改\n"
+            "• Ctrl+C 复制区段名称"
         ),
         "dlg_size_fixed":        "X1、Y1 = 0（固定）",
         "dlg_size_warn":         "注意：第二组值 = {w}×{h}，"
@@ -279,32 +540,77 @@ STRINGS = {
         # --- 按钮 ---
         "btn_save":              "保存",
         "btn_revert":            "撤销",
+        "btn_history":           "历史",
+        "btn_open_external":     "用记事本打开文件",
+        "btn_open_external_tip": "用文本编辑器打开当前文件",
+        "btn_add":               "添加",
+        "btn_edit":              "修改",
+        "btn_delete":            "删除",
+        "btn_ok":                "确定",
+        "btn_cancel":            "取消",
+        "btn_close":             "关闭",
+        "btn_copy":              "复制",
 
         # --- 对话框 ---
         "err_read_title":        "读取错误",
         "err_read_msg":          "无法读取文件：\n{err}",
         "err_write_title":       "写入错误",
         "err_write_msg":         "无法保存文件：\n{err}",
+        "err_open_title":        "打开错误",
+        "err_open_msg":          "无法用外部程序打开文件：\n{err}",
         "unsaved_title":         "未保存的更改",
         "unsaved_msg":           "文件中有未保存的更改。\n"
                                  "是否在继续之前保存？",
 
+        # --- 历史 ---
+        "hist_title":            "修改历史",
+        "hist_initial":          "— 文件初始状态 —",
+        "hist_revert_to":        "回退到所选状态",
+        "hist_current_mark":     "►",
+        "hist_col_sec":          "区段",
+        "hist_col_param":        "参数",
+        "hist_col_before":       "修改前",
+        "hist_col_after":        "修改后",
+        "hist_param_dlgsize":    "DIALOG 窗口尺寸",
+        "hist_none":             "—",
+
+        # --- Capital.dat ---
+        "layer_add_title":       "新建图层",
+        "layer_edit_title":      "编辑图层",
+        "fld_z":                 "Z 顺序（LAYER 编号）",
+        "fld_build":             "建筑 ID（Gbuild）",
+        "fld_image":             "图像名称（Capital.ff）",
+        "fld_coords":            "坐标 X1、Y1、X2、Y2",
+        "fld_extra":             "其他字段（逗号分隔）",
+        "fld_layerinfo":         "为该建筑创建 LAYERINFO 记录",
+        "err_layer_title":       "数据无效",
+        "err_layer_z":           "Z 顺序必须是整数。",
+        "err_layer_dup":         "该区段中已存在编号为 {z} 的图层。",
+        "err_layer_coords":      "坐标必须是整数。",
+        "del_title":             "删除图层",
+        "del_msg":               "删除图层 {name}（{image}）？\n"
+                                 "可通过 Ctrl+Z 撤销。",
+        "del_layerinfo":         "同时删除 {build} 的 LAYERINFO 记录",
+        "no_selection":          "未选中图层。",
+
         # --- 关于 ---
         "about_title":           "关于",
-        "about_name":            APP_TITLE + " by Fessoid",
-        "about_version":         "版本 1.1",
+        "about_name":            APP_TITLE,
+        "about_version":         "版本 " + APP_VERSION,
         "about_text": (
-            "用于 .dlg 文件的可视化编辑器，可交互式地\n"
-            "更改界面元素的大小和位置。打开文件后从列表\n"
-            "中选择 DIALOG 区段，在画布上查看所有元素，\n"
-            "通过鼠标拖拽或手动输入坐标来调整，然后将\n"
-            "更改保存回文件，同时保留原始语法。"
+            "Disciples 界面文件的可视化编辑器。\n\n"
+            ".dlg 模式：用鼠标拖拽或手动输入坐标来\n"
+            "更改界面元素的大小和位置。\n\n"
+            "Capital.dat 模式：可视化地添加、修改和删除\n"
+            "都城主界面（城市全景，而非单位发展分支）中的\n"
+            "建筑图层。\n\n"
+            "修改将写回文件并保留原始语法。"
         ),
     },
 }
 
 # =============================================================================
-# ПАРСИНГ ФАЙЛА
+# ПАРСИНГ .DLG
 # =============================================================================
 
 ELEMENT_TYPES = {
@@ -324,6 +630,12 @@ COLOR_TEXT_MUTED   = "#606060"
 COLOR_SELECTION    = "#0a64a4"
 COLOR_DIALOG_FRAME = "#000000"
 COLOR_WARN         = "#a04020"
+
+# Цвета для режима Capital.dat.
+COLOR_CAPITAL_BG   = "#3a4a34"   # «трава» — фон карты столицы
+COLOR_LAYER_FILL   = "#b8a882"   # обычное здание
+COLOR_LAYER_SYS    = "#8fa3b8"   # системный слой (без ID здания)
+COLOR_LAYER_EDGE   = "#2a2a2a"
 
 
 class DlgElement:
@@ -445,6 +757,273 @@ def write_dlg_file(path, lines, sections, line_ending):
 
 
 # =============================================================================
+# ПАРСИНГ CAPITAL.DAT
+#
+# Формат (см. https://d2ext.sklabs.ru/ru/articles/modding-buildings-in-the-capital):
+#
+#   [HUMAN]
+#   LayerInfoCount=26
+#   LAYERINFO_00=1,,                        флаг, ID здания, (пусто)
+#   LAYERINFO_01=0,G000BB0001,
+#   ...
+#   LayerCount=31
+#   LAYER_160=G000BB0001,EMP_STABLE,0,0,0,,0,0,0,520,524,640,600
+#   ^^^^^^^^^ ^^^^^^^^^^ ^^^^^^^^^^ ^^^^^^^^^^^^ ^^^^^^^^^^^^^^^
+#   Z-order   ID здания  имя картинки  доп. поля   X1,Y1,X2,Y2
+#
+# Объявленные счётчики (LayerCount / LayerInfoCount) в оригинальных файлах
+# не всегда совпадают с фактическим количеством строк, поэтому мы храним
+# исходное значение и меняем его только на дельту при добавлении/удалении.
+# Так гарантируется побайтовый round-trip нетронутого файла.
+# =============================================================================
+
+_DAT_SECTION_RE   = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+_DAT_LAYERINFO_RE = re.compile(r"^(LAYERINFO_\w+)=(.*)$", re.IGNORECASE)
+_DAT_LAYER_RE     = re.compile(r"^(LAYER_\w+)=(.*)$", re.IGNORECASE)
+_DAT_LICOUNT_RE   = re.compile(r"^LayerInfoCount=(-?\d+)\s*$", re.IGNORECASE)
+_DAT_LCOUNT_RE    = re.compile(r"^LayerCount=(-?\d+)\s*$", re.IGNORECASE)
+
+# Индексы координат внутри списка полей строки LAYER_*.
+DAT_COORD_OFFSET = 9
+DAT_FIELD_COUNT = 13
+
+# Вторичные («картиночные») координаты слоя — поля 3 и 4:
+#   LAYER_99=G000BB0100,EL_CENTORHOLE,0,274,475,,0,0,0,309,497,383,564
+#                                       ^^^ ^^^                (X, Y картинки)
+# Первые четыре координаты (поля 9..12) — программная рамка здания, а поля
+# 3 и 4 задают положение самой картинки на экране. Смещение картинки
+# относительно рамки у каждого слоя своё, поэтому при перемещении слоя мы
+# сдвигаем вторичные координаты на ту же дельту, сохраняя это смещение.
+DAT_IMG_X_INDEX = 3
+DAT_IMG_Y_INDEX = 4
+
+
+def _to_int(value, default=0):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+class DatLayerInfo:
+    """Строка LAYERINFO_xx=флаг,ID_здания,"""
+
+    def __init__(self, key, fields):
+        self.key = key
+        self.fields = list(fields)
+        while len(self.fields) < 3:
+            self.fields.append("")
+
+    @property
+    def build_id(self):
+        return self.fields[1]
+
+    @build_id.setter
+    def build_id(self, value):
+        self.fields[1] = value
+
+    def to_line(self):
+        return f"{self.key}={','.join(self.fields)}"
+
+
+class DatLayer:
+    """Строка LAYER_zzz=ID,IMAGE,...,X1,Y1,X2,Y2"""
+
+    def __init__(self, key, fields):
+        self.key = key
+        self.fields = list(fields)
+        while len(self.fields) < DAT_FIELD_COUNT:
+            self.fields.append("0")
+
+    # --- Z-order --------------------------------------------------------
+    @property
+    def z(self):
+        return _to_int(self.key.split("_", 1)[1], 0)
+
+    # --- Поля -----------------------------------------------------------
+    @property
+    def build_id(self):
+        return self.fields[0]
+
+    @build_id.setter
+    def build_id(self, value):
+        self.fields[0] = value
+
+    @property
+    def image(self):
+        return self.fields[1]
+
+    @image.setter
+    def image(self, value):
+        self.fields[1] = value
+
+    @property
+    def extra(self):
+        """Поля между именем картинки и координатами."""
+        return self.fields[2:DAT_COORD_OFFSET]
+
+    @extra.setter
+    def extra(self, values):
+        self.fields[2:DAT_COORD_OFFSET] = list(values)
+
+    # --- Координаты (интерфейс, совместимый с DlgElement) ----------------
+    def _coord(self, i):
+        return _to_int(self.fields[DAT_COORD_OFFSET + i], 0)
+
+    def _set_coord(self, i, value):
+        self.fields[DAT_COORD_OFFSET + i] = str(int(value))
+
+    # --- Вторичные координаты (положение картинки на экране) -------------
+    @property
+    def img_x(self):
+        return _to_int(self.fields[DAT_IMG_X_INDEX], 0)
+
+    @img_x.setter
+    def img_x(self, value):
+        self.fields[DAT_IMG_X_INDEX] = str(int(value))
+
+    @property
+    def img_y(self):
+        return _to_int(self.fields[DAT_IMG_Y_INDEX], 0)
+
+    @img_y.setter
+    def img_y(self, value):
+        self.fields[DAT_IMG_Y_INDEX] = str(int(value))
+
+    def shift_secondary(self, dx, dy):
+        """Сдвигает вторичные координаты вслед за рамкой слоя."""
+        if not dx and not dy:
+            return
+        self.img_x = self.img_x + int(dx)
+        self.img_y = self.img_y + int(dy)
+
+    x1 = property(lambda s: s._coord(0), lambda s, v: s._set_coord(0, v))
+    y1 = property(lambda s: s._coord(1), lambda s, v: s._set_coord(1, v))
+    x2 = property(lambda s: s._coord(2), lambda s, v: s._set_coord(2, v))
+    y2 = property(lambda s: s._coord(3), lambda s, v: s._set_coord(3, v))
+
+    @property
+    def name(self):
+        """Отображаемое имя — так же, как у DlgElement."""
+        return self.image or self.build_id or self.key
+
+    @property
+    def kind(self):
+        return "LAYER"
+
+    def drawable(self):
+        """Слои с -1 или нулевым размером в игре не позиционируются."""
+        return self.x2 > self.x1 and self.y2 > self.y1 and \
+            self.x1 >= 0 and self.y1 >= 0
+
+    def to_line(self):
+        return f"{self.key}={','.join(self.fields)}"
+
+    @staticmethod
+    def make(z, build_id, image, extra, coords):
+        fields = [build_id, image] + list(extra) + [str(int(c)) for c in coords]
+        return DatLayer(f"LAYER_{z:02d}", fields)
+
+
+class DatSection:
+    """Секция [HUMAN] / [UNDEAD] / ... файла Capital.dat."""
+
+    def __init__(self, name):
+        self.name = name
+        self.layerinfos = []
+        self.layers = []
+        # Объявленные в файле счётчики (могут не совпадать с фактическими).
+        self.li_count = 0
+        self.layer_count = 0
+        # Сколько пустых строк стоит перед заголовком секции — нужно для
+        # побайтового round-trip (в оригинале разметка неравномерная).
+        self.blank_before = 0
+
+    # Совместимость с кодом, работающим с DlgSection.
+    @property
+    def elements(self):
+        return self.layers
+
+    def next_free_z(self, preferred=None):
+        used = {l.z for l in self.layers}
+        z = preferred if preferred is not None else 1
+        while z in used:
+            z += 1
+        return z
+
+    def next_layerinfo_key(self):
+        idx = len(self.layerinfos)
+        return f"LAYERINFO_{idx:02d}"
+
+    def has_layerinfo(self, build_id):
+        bid = (build_id or "").strip().upper()
+        if not bid:
+            return False
+        return any((li.build_id or "").strip().upper() == bid
+                   for li in self.layerinfos)
+
+
+def parse_dat_file(path):
+    with open(path, "rb") as f:
+        raw = f.read()
+    line_ending = "\r\n" if b"\r\n" in raw else "\n"
+    text = raw.decode("cp1252", errors="replace")
+    lines = text.split(line_ending)
+
+    sections = []
+    current = None
+    pending_blanks = 0
+    for line in lines:
+        if not line.strip():
+            pending_blanks += 1
+            continue
+        m = _DAT_SECTION_RE.match(line)
+        if m:
+            current = DatSection(m.group(1))
+            current.blank_before = pending_blanks
+            pending_blanks = 0
+            sections.append(current)
+            continue
+        pending_blanks = 0
+        if current is None:
+            continue
+        m = _DAT_LICOUNT_RE.match(line.strip())
+        if m:
+            current.li_count = int(m.group(1))
+            continue
+        m = _DAT_LCOUNT_RE.match(line.strip())
+        if m:
+            current.layer_count = int(m.group(1))
+            continue
+        m = _DAT_LAYERINFO_RE.match(line.strip())
+        if m:
+            current.layerinfos.append(
+                DatLayerInfo(m.group(1), m.group(2).split(",")))
+            continue
+        m = _DAT_LAYER_RE.match(line.strip())
+        if m:
+            current.layers.append(
+                DatLayer(m.group(1), m.group(2).split(",")))
+            continue
+    return sections, line_ending, pending_blanks
+
+
+def write_dat_file(path, sections, line_ending, trailing_blanks=0):
+    out = []
+    for sec in sections:
+        out.extend([""] * sec.blank_before)      # разделители между секциями
+        out.append(f"[{sec.name}]")
+        out.append(f"LayerInfoCount={sec.li_count}")
+        out.extend(li.to_line() for li in sec.layerinfos)
+        out.append(f"LayerCount={sec.layer_count}")
+        out.extend(l.to_line() for l in sec.layers)
+    out.extend([""] * trailing_blanks)
+    text = line_ending.join(out)
+    with open(path, "wb") as f:
+        f.write(text.encode("cp1252", errors="replace"))
+
+
+# =============================================================================
 # GUI
 # =============================================================================
 
@@ -460,37 +1039,75 @@ HIT_T = 8
 HIT_B = 16
 HIT_DIALOG = "dialog"
 
+# Ширина боковых колонок — фиксирована, центр тянется на всё остальное.
+LEFT_WIDTH = 260
+RIGHT_WIDTH = 380
+# Высота видимой части блока подсказок (остальное — прокруткой).
+HINTS_HEIGHT = 120
+
+
+class HistoryEntry:
+    """Одно действие в истории.
+
+    Для таблицы истории: секция, параметр (имя элемента / картинки слоя),
+    значение «было» и значение «стало». Плюс снимки данных до и после —
+    по ним работают откат и повтор.
+    """
+
+    def __init__(self, section, param, old_value, new_value, before, after):
+        self.section = section
+        self.param = param
+        self.old_value = old_value
+        self.new_value = new_value
+        self.before = before
+        self.after = after
+
 
 class DlgEditorApp:
     def __init__(self, root, initial_path=None):
         self.root = root
-        self.root.geometry("1320x780")
-        self.root.minsize(900, 500)
         self.root.configure(bg=COLOR_BG_APP)
 
         self.lang = "ru"
+        self.mode = MODE_DLG
         self.file_path = None
         self.lines = []
         self.sections = []
         self.line_ending = "\r\n"
+        self.trailing_blanks = 0
         self.current_section = None
         self.selected_element = None
         self.dirty = False
+        self._filtered_sections = []
+
+        # История изменений (своя на каждый открытый файл; хранится целиком).
+        self.dat_secondary = True     # править вторичные координаты в .dat
+        self.history = []
+        self.hist_index = 0
+        self.saved_index = 0
+        self.base_snapshot = None
+        self.hist_selected = 0          # выделенная строка в таблице истории
+        self.hist_cells = {}            # индекс строки -> её ячейки (Label)
 
         self.drag_target = None
         self.drag_mode = HIT_NONE
         self.drag_start_x = 0
         self.drag_start_y = 0
         self.drag_orig = None
+        self.drag_orig_img = None      # вторичные координаты слоя до перетаскивания
 
         self.element_to_rect = {}
         self.dialog_rect_id = None
+        self._history_win = None
 
         # Загружаем настройки до построения UI, чтобы язык был сразу верным.
-        saved_lang, saved_file, saved_maximized, saved_section = self._load_settings()
+        (saved_lang, saved_file, saved_maximized, saved_section,
+         saved_dat_secondary) = self._load_settings()
         if saved_lang and saved_lang in STRINGS:
             self.lang = saved_lang
+        self.dat_secondary = saved_dat_secondary
 
+        self._apply_initial_geometry()
         self._setup_styles()
         self._build_ui()
         self._bind_shortcuts()
@@ -512,10 +1129,24 @@ class DlgEditorApp:
             s = s.format(**kw)
         return s
 
+    # --- Geometry ----------------------------------------------------------
+
+    def _apply_initial_geometry(self):
+        """Окно масштабируется под текущий экран (важно для 4K)."""
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w = max(1000, min(int(sw * 0.85), sw - 80))
+        h = max(680, min(int(sh * 0.85), sh - 120))
+        x = max(0, (sw - w) // 2)
+        y = max(0, (sh - h) // 3)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.minsize(980, 620)
+
     # --- Settings ----------------------------------------------------------
 
     def _load_settings(self):
-        """Читает settings.ini, возвращает (lang, last_file, maximized, last_section)."""
+        """Читает ini: (lang, last_file, maximized, last_section,
+        dat_secondary)."""
         cfg = configparser.ConfigParser()
         try:
             cfg.read(SETTINGS_PATH, encoding="utf-8")
@@ -523,18 +1154,20 @@ class DlgEditorApp:
             last_file = cfg.get("General", "last_file", fallback=None)
             maximized = cfg.get("General", "maximized", fallback="0")
             last_section = cfg.get("General", "last_section", fallback=None)
-            return lang, last_file, maximized == "1", last_section
+            dat_secondary = cfg.get("General", "dat_secondary", fallback="1")
+            return (lang, last_file, maximized == "1", last_section,
+                    dat_secondary != "0")
         except Exception:
-            return None, None, False, None
+            return None, None, False, None, True
 
     def _save_settings(self):
-        """Записывает текущие настройки в settings.ini."""
         cfg = configparser.ConfigParser()
         cfg["General"] = {
             "language": self.lang,
             "last_file": self.file_path or "",
             "maximized": "1" if self.root.state() == "zoomed" else "0",
             "last_section": self.current_section.name if self.current_section else "",
+            "dat_secondary": "1" if self.dat_secondary else "0",
         }
         try:
             with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -560,12 +1193,18 @@ class DlgEditorApp:
                         foreground=COLOR_TEXT)
         style.configure("TEntry", fieldbackground=COLOR_INPUT_BG,
                         foreground=COLOR_TEXT)
+        style.configure("TCheckbutton", background=COLOR_BG_APP,
+                        foreground=COLOR_TEXT)
         style.configure("Treeview", background=COLOR_INPUT_BG,
                         fieldbackground=COLOR_INPUT_BG, foreground=COLOR_TEXT)
         style.configure("Treeview.Heading", background=COLOR_BG_APP,
                         foreground=COLOR_TEXT)
         style.configure("TButton", background=COLOR_BG_APP,
                         foreground=COLOR_TEXT)
+        # Маленькая кнопка (например «Открыть» рядом с подсказками).
+        style.configure("Small.TButton", background=COLOR_BG_APP,
+                        foreground=COLOR_TEXT, padding=(4, 0),
+                        font=("Segoe UI", 8))
         # Цветные кнопки.
         style.configure("Save.TButton",
                         background="#64DF85", foreground=COLOR_TEXT)
@@ -575,6 +1214,16 @@ class DlgEditorApp:
                         background="#FFDF40", foreground=COLOR_TEXT)
         style.map("Revert.TButton",
                   background=[("active", "#E8CC38"), ("pressed", "#D4BA30")])
+        style.configure("History.TButton",
+                        background="#9CC4E4", foreground=COLOR_TEXT)
+        style.map("History.TButton",
+                  background=[("active", "#88B2D4"), ("pressed", "#74A0C4")])
+        # Маленькая кнопка в цвете «Истории» — «Открыть в блокноте».
+        style.configure("SmallHistory.TButton",
+                        background="#9CC4E4", foreground=COLOR_TEXT,
+                        padding=(4, 0), font=("Segoe UI", 8))
+        style.map("SmallHistory.TButton",
+                  background=[("active", "#88B2D4"), ("pressed", "#74A0C4")])
 
     # --- UI build ----------------------------------------------------------
 
@@ -583,14 +1232,20 @@ class DlgEditorApp:
 
         main = ttk.Frame(self.root)
         main.pack(fill="both", expand=True)
-        main.columnconfigure(0, weight=0, minsize=240)
+        # Боковые колонки фиксированы, центр забирает всё свободное место.
+        main.columnconfigure(0, weight=0, minsize=LEFT_WIDTH)
         main.columnconfigure(1, weight=1)
-        main.columnconfigure(2, weight=0, minsize=320)
+        main.columnconfigure(2, weight=0, minsize=RIGHT_WIDTH)
         main.rowconfigure(0, weight=1)
 
-        # --- Левая колонка ---
-        left = ttk.Frame(main, padding=4)
+        self._build_left(main)
+        self._build_center(main)
+        self._build_right(main)
+
+    def _build_left(self, main):
+        left = ttk.Frame(main, padding=4, width=LEFT_WIDTH)
         left.grid(row=0, column=0, sticky="nsew")
+        left.grid_propagate(False)
         left.rowconfigure(3, weight=1)
         left.columnconfigure(0, weight=1)
 
@@ -598,35 +1253,35 @@ class DlgEditorApp:
         self.lbl_sections.grid(row=0, column=0, sticky="w")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write",
-                                   lambda *a: self._refresh_section_list())
+                                  lambda *a: self._refresh_section_list())
         ttk.Entry(left, textvariable=self.search_var).grid(
             row=1, column=0, sticky="ew", pady=(2, 4))
 
-        # --- Фильтры по размеру ---
-        filter_frame = ttk.Frame(left)
-        filter_frame.grid(row=2, column=0, sticky="ew", pady=(0, 4))
-        filter_frame.columnconfigure(1, weight=1)
+        # --- Фильтры по размеру (только для .dlg) ---
+        self.filter_frame = ttk.Frame(left)
+        self.filter_frame.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        self.filter_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(filter_frame, text="W").grid(row=0, column=0, padx=(0, 2))
+        ttk.Label(self.filter_frame, text="W").grid(row=0, column=0, padx=(0, 2))
         self.filter_w_op = tk.StringVar(value="—")
         self.filter_w_val = tk.StringVar(value="")
-        ttk.Combobox(filter_frame, textvariable=self.filter_w_op,
+        ttk.Combobox(self.filter_frame, textvariable=self.filter_w_op,
                      values=["—", "=", ">", ">=", "<", "<="],
                      width=3, state="readonly").grid(row=0, column=1, padx=2)
-        ttk.Entry(filter_frame, textvariable=self.filter_w_val,
+        ttk.Entry(self.filter_frame, textvariable=self.filter_w_val,
                   width=5, justify="right").grid(row=0, column=2, padx=(2, 0))
 
-        ttk.Label(filter_frame, text="H").grid(row=1, column=0, padx=(0, 2),
-                                                pady=(2, 0))
+        ttk.Label(self.filter_frame, text="H").grid(row=1, column=0, padx=(0, 2),
+                                                    pady=(2, 0))
         self.filter_h_op = tk.StringVar(value="—")
         self.filter_h_val = tk.StringVar(value="")
-        ttk.Combobox(filter_frame, textvariable=self.filter_h_op,
+        ttk.Combobox(self.filter_frame, textvariable=self.filter_h_op,
                      values=["—", "=", ">", ">=", "<", "<="],
                      width=3, state="readonly").grid(row=1, column=1, padx=2,
-                                                      pady=(2, 0))
-        ttk.Entry(filter_frame, textvariable=self.filter_h_val,
+                                                     pady=(2, 0))
+        ttk.Entry(self.filter_frame, textvariable=self.filter_h_val,
                   width=5, justify="right").grid(row=1, column=2, padx=(2, 0),
-                                                  pady=(2, 0))
+                                                 pady=(2, 0))
 
         for var in (self.filter_w_op, self.filter_w_val,
                     self.filter_h_op, self.filter_h_val):
@@ -646,7 +1301,12 @@ class DlgEditorApp:
         self.section_listbox.config(yscrollcommand=sb.set)
         self.section_listbox.bind("<<ListboxSelect>>", self._on_section_select)
 
-        # --- Центральная колонка: canvas ---
+        # Копирование имени секции: Ctrl+C и контекстное меню.
+        self.section_menu = tk.Menu(self.root, tearoff=0)
+        # Ctrl+C обрабатывается общим обработчиком _on_control_key.
+        self.section_listbox.bind("<Button-3>", self._on_section_right_click)
+
+    def _build_center(self, main):
         center = ttk.Frame(main, padding=4)
         center.grid(row=0, column=1, sticky="nsew")
         center.rowconfigure(1, weight=1)
@@ -668,22 +1328,25 @@ class DlgEditorApp:
         self.canvas.grid(row=0, column=0, sticky="nsew")
 
         self.h_scroll = ttk.Scrollbar(canvas_frame, orient="horizontal",
-                                       command=self.canvas.xview)
+                                      command=self.canvas.xview)
         self.h_scroll.grid(row=1, column=0, sticky="ew")
         self.v_scroll = ttk.Scrollbar(canvas_frame, orient="vertical",
-                                       command=self.canvas.yview)
+                                      command=self.canvas.yview)
         self.v_scroll.grid(row=0, column=1, sticky="ns")
         self.canvas.configure(xscrollcommand=self.h_scroll.set,
-                               yscrollcommand=self.v_scroll.set)
+                              yscrollcommand=self.v_scroll.set)
 
         self.canvas.bind("<Motion>", self._on_canvas_motion)
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        # Размер холста меняется вместе с окном — пересчитываем область прокрутки.
+        self.canvas.bind("<Configure>", lambda _e: self._update_scrollregion())
 
-        # --- Правая колонка ---
-        right = ttk.Frame(main, padding=4)
+    def _build_right(self, main):
+        right = ttk.Frame(main, padding=4, width=RIGHT_WIDTH)
         right.grid(row=0, column=2, sticky="nsew")
+        right.grid_propagate(False)
         right.columnconfigure(0, weight=1)
         right.rowconfigure(1, weight=1)
 
@@ -694,30 +1357,48 @@ class DlgEditorApp:
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
 
-        cols = ("kind", "name", "x1", "y1", "x2", "y2")
-        self.element_tree = ttk.Treeview(list_frame, columns=cols,
-                                         show="headings", height=14)
-        for col, w in zip(cols, (70, 140, 40, 40, 40, 40)):
-            self.element_tree.heading(col, text=col.upper())
-            self.element_tree.column(col, width=w, anchor="w" if col in
-                                     ("kind", "name") else "e")
+        self.element_tree = ttk.Treeview(list_frame, show="headings", height=12)
         self.element_tree.grid(row=0, column=0, sticky="nsew")
         et_sb = ttk.Scrollbar(list_frame, orient="vertical",
                               command=self.element_tree.yview)
         et_sb.grid(row=0, column=1, sticky="ns")
         self.element_tree.config(yscrollcommand=et_sb.set)
         self.element_tree.bind("<<TreeviewSelect>>",
-                                self._on_element_tree_select)
+                               self._on_element_tree_select)
+        self.element_tree.bind("<Double-1>", lambda _e: self.cmd_layer_edit())
 
-        # Размер DIALOG.
+        # Копирование имени элемента/слоя: Ctrl+C и контекстное меню.
+        self.element_menu = tk.Menu(self.root, tearoff=0)
+        # Ctrl+C обрабатывается общим обработчиком _on_control_key.
+        self.element_tree.bind("<Button-3>", self._on_element_right_click)
+
+        self._configure_element_columns()
+
+        # Кнопки работы со слоями Capital.dat (видны только в режиме .dat).
+        self.layer_btns = ttk.Frame(right)
+        self.layer_btns.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        for c in range(3):
+            self.layer_btns.columnconfigure(c, weight=1)
+        self.btn_add = ttk.Button(self.layer_btns, text="...",
+                                  command=self.cmd_layer_add)
+        self.btn_add.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        self.btn_edit = ttk.Button(self.layer_btns, text="...",
+                                   command=self.cmd_layer_edit)
+        self.btn_edit.grid(row=0, column=1, sticky="ew", padx=2)
+        self.btn_delete = ttk.Button(self.layer_btns, text="...",
+                                     command=self.cmd_layer_delete)
+        self.btn_delete.grid(row=0, column=2, sticky="ew", padx=(2, 0))
+        self.layer_btns.grid_remove()
+
+        # Размер DIALOG (только .dlg).
         self.win_box = ttk.LabelFrame(right, text="...")
-        self.win_box.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        self.win_box.grid(row=3, column=0, sticky="ew", pady=(0, 4))
         for c in range(2):
             self.win_box.columnconfigure(c, weight=1)
         ttk.Label(self.win_box, text="Width").grid(row=0, column=0, padx=2,
-                                                    pady=2)
+                                                   pady=2)
         ttk.Label(self.win_box, text="Height").grid(row=0, column=1, padx=2,
-                                                     pady=2)
+                                                    pady=2)
         self.dlg_w_var = tk.IntVar(value=0)
         self.dlg_h_var = tk.IntVar(value=0)
         e_w = ttk.Entry(self.win_box, textvariable=self.dlg_w_var, width=8,
@@ -730,19 +1411,19 @@ class DlgEditorApp:
             e.bind("<Return>", lambda _ev: self._apply_dialog_size())
             e.bind("<FocusOut>", lambda _ev: self._apply_dialog_size())
         self.dlg_size_hint = ttk.Label(self.win_box, text="...",
-                                        foreground=COLOR_TEXT_MUTED)
+                                       foreground=COLOR_TEXT_MUTED)
         self.dlg_size_hint.grid(row=2, column=0, columnspan=2, padx=2,
-                                 pady=(0, 4), sticky="w")
+                                pady=(0, 4), sticky="w")
 
-        # Координаты элемента.
+        # Координаты элемента / слоя.
         self.coord_box = ttk.LabelFrame(right, text="...")
-        self.coord_box.grid(row=3, column=0, sticky="ew", pady=(0, 4))
+        self.coord_box.grid(row=4, column=0, sticky="ew", pady=(0, 4))
         for c in range(4):
             self.coord_box.columnconfigure(c, weight=1)
         self.coord_vars = {}
         for i, label in enumerate(("X1", "Y1", "X2", "Y2")):
             ttk.Label(self.coord_box, text=label).grid(row=0, column=i,
-                                                        padx=2, pady=2)
+                                                       padx=2, pady=2)
             v = tk.IntVar(value=0)
             e = ttk.Entry(self.coord_box, textvariable=v, width=6,
                           justify="right")
@@ -751,26 +1432,79 @@ class DlgEditorApp:
             e.bind("<FocusOut>", lambda _ev: self._apply_coord_entries())
             self.coord_vars[label] = v
 
-        # Подсказки.
-        self.hints_box = ttk.LabelFrame(right, text="...")
-        self.hints_box.grid(row=4, column=0, sticky="ew")
-        self.lbl_hints = ttk.Label(self.hints_box, justify="left", text="...")
-        self.lbl_hints.pack(anchor="w", padx=4, pady=4)
+        # Подсказки. Заголовок рамки — отдельный виджет (labelwidget), в нём
+        # же живёт кнопка «Открыть в блокноте», чтобы она не закрывала текст.
+        # Ширина заголовка задана явно (grid_propagate выключен), чтобы кнопку
+        # можно было прижать к правому краю — подальше от слова «Подсказки».
+        self.hints_head = ttk.Frame(right, width=RIGHT_WIDTH - 26, height=24)
+        self.hints_head.grid_propagate(False)
+        self.hints_head.columnconfigure(1, weight=1)
+        self.lbl_hints_title = ttk.Label(self.hints_head, text="...")
+        self.lbl_hints_title.grid(row=0, column=0, sticky="w")
+        self.btn_open_ext = ttk.Button(self.hints_head, text="...", width=28,
+                                       style="SmallHistory.TButton",
+                                       command=self.cmd_open_external)
+        self.btn_open_ext.grid(row=0, column=2, sticky="e")
+
+        self.hints_box = ttk.LabelFrame(right, labelwidget=self.hints_head)
+        self.hints_box.grid(row=5, column=0, sticky="nsew")
+        self.hints_box.columnconfigure(0, weight=1)
+        self.hints_box.rowconfigure(0, weight=1)
+
+        # Текст подсказок лежит на холсте — так он прокручивается по вертикали.
+        self.hints_canvas = tk.Canvas(self.hints_box, bg=COLOR_BG_APP,
+                                      highlightthickness=0, bd=0, height=HINTS_HEIGHT)
+        self.hints_canvas.grid(row=0, column=0, sticky="nsew", padx=(4, 0),
+                               pady=4)
+        hints_sb = ttk.Scrollbar(self.hints_box, orient="vertical",
+                                 command=self.hints_canvas.yview)
+        hints_sb.grid(row=0, column=1, sticky="ns", pady=4)
+        self.hints_canvas.configure(yscrollcommand=hints_sb.set)
+        self.lbl_hints = ttk.Label(self.hints_canvas, justify="left", text="...")
+        self.hints_canvas.create_window((0, 0), window=self.lbl_hints,
+                                        anchor="nw")
+        self.lbl_hints.bind(
+            "<Configure>",
+            lambda _e: self.hints_canvas.configure(
+                scrollregion=self.hints_canvas.bbox("all")))
+        self.hints_canvas.bind(
+            "<MouseWheel>",
+            lambda e: self.hints_canvas.yview_scroll(
+                -1 if e.delta > 0 else 1, "units"))
 
         # Кнопки.
         btn_frame = ttk.Frame(right)
-        btn_frame.grid(row=5, column=0, sticky="ew", pady=(6, 0))
-        btn_frame.columnconfigure(0, weight=1)
-        btn_frame.columnconfigure(1, weight=1)
+        btn_frame.grid(row=6, column=0, sticky="ew", pady=(6, 0))
+        for c in range(3):
+            btn_frame.columnconfigure(c, weight=1)
 
         self.btn_save = ttk.Button(btn_frame, text="...",
-                                    command=self.cmd_save,
-                                    style="Save.TButton")
-        self.btn_save.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+                                   command=self.cmd_save,
+                                   style="Save.TButton")
+        self.btn_save.grid(row=0, column=0, sticky="ew", padx=(0, 2))
         self.btn_revert = ttk.Button(btn_frame, text="...",
-                                      command=self.cmd_revert,
-                                      style="Revert.TButton")
-        self.btn_revert.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+                                     command=self.cmd_revert,
+                                     style="Revert.TButton")
+        self.btn_revert.grid(row=0, column=1, sticky="ew", padx=2)
+        self.btn_history = ttk.Button(btn_frame, text="...",
+                                      command=self.cmd_history,
+                                      style="History.TButton")
+        self.btn_history.grid(row=0, column=2, sticky="ew", padx=(2, 0))
+
+    def _configure_element_columns(self):
+        """Колонки таблицы зависят от режима (.dlg или Capital.dat)."""
+        if self.mode == MODE_DAT:
+            cols = ("z", "build", "image", "x1", "y1", "x2", "y2")
+            widths = (40, 85, 105, 36, 36, 36, 36)
+        else:
+            cols = ("kind", "name", "x1", "y1", "x2", "y2")
+            widths = (70, 130, 38, 38, 38, 38)
+        self.element_tree.config(columns=cols)
+        for col, w in zip(cols, widths):
+            self.element_tree.heading(col, text=col.upper())
+            anchor = "w" if col in ("kind", "name", "build", "image") else "e"
+            self.element_tree.column(col, width=w, minwidth=30, anchor=anchor,
+                                     stretch=(col in ("name", "image")))
 
     # --- Language ----------------------------------------------------------
 
@@ -782,44 +1516,73 @@ class DlgEditorApp:
         self._save_settings()
 
     def _build_menu(self):
+        # Меню пересоздаётся целиком: entryconfigure -label не работает на Windows Tk.
         menubar = tk.Menu(self.root)
 
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label=self.t("menu_open"), command=self.cmd_open,
-                              accelerator="Ctrl+O")
+                             accelerator="Ctrl+O")
         filemenu.add_command(label=self.t("menu_save"), command=self.cmd_save,
-                              accelerator="Ctrl+S")
+                             accelerator="Ctrl+S")
         filemenu.add_command(label=self.t("menu_save_as"),
-                              command=self.cmd_save_as)
+                             command=self.cmd_save_as)
         filemenu.add_separator()
         filemenu.add_command(label=self.t("menu_exit"), command=self.cmd_exit)
         menubar.add_cascade(label=self.t("menu_file"), menu=filemenu)
 
+        editmenu = tk.Menu(menubar, tearoff=0)
+        editmenu.add_command(label=self.t("menu_undo"), command=self.cmd_undo,
+                             accelerator="Ctrl+Z")
+        editmenu.add_command(label=self.t("menu_redo"), command=self.cmd_redo,
+                             accelerator="Ctrl+Y")
+        editmenu.add_separator()
+        editmenu.add_command(label=self.t("menu_history"),
+                             command=self.cmd_history,
+                             accelerator="Ctrl+H")
+        menubar.add_cascade(label=self.t("menu_edit"), menu=editmenu)
+
+        setmenu = tk.Menu(menubar, tearoff=0)
+        self.dat_secondary_var = tk.BooleanVar(value=self.dat_secondary)
+        setmenu.add_checkbutton(label=self.t("menu_dat_secondary"),
+                                variable=self.dat_secondary_var,
+                                command=self._toggle_dat_secondary)
+        menubar.add_cascade(label=self.t("menu_settings"), menu=setmenu)
+
         langmenu = tk.Menu(menubar, tearoff=0)
-        langmenu.add_command(label=self.t("menu_lang_ru"),
-                              command=lambda: self._set_language("ru"))
-        langmenu.add_command(label=self.t("menu_lang_en"),
-                              command=lambda: self._set_language("en"))
-        langmenu.add_command(label=self.t("menu_lang_pl"),
-                              command=lambda: self._set_language("pl"))
-        langmenu.add_command(label=self.t("menu_lang_zh"),
-                              command=lambda: self._set_language("zh"))
+        for code in ("ru", "en", "pl", "zh"):
+            langmenu.add_command(
+                label=self.t("menu_lang_" + code),
+                command=lambda c=code: self._set_language(c))
         menubar.add_cascade(label=self.t("menu_language"), menu=langmenu)
 
         menubar.add_command(label=self.t("menu_about"), command=self.cmd_about)
         self.root.config(menu=menubar)
 
+    def _toggle_dat_secondary(self):
+        """Править ли вторичные координаты (положение картинки) в .dat."""
+        self.dat_secondary = bool(self.dat_secondary_var.get())
+        self._save_settings()
+
     def _apply_language(self):
         self._update_title()
         self._build_menu()
-        self.lbl_sections.config(text=self.t("sections_label"))
-        self.lbl_elements.config(text=self.t("elements_label"))
+        is_dat = self.mode == MODE_DAT
+        self.lbl_sections.config(
+            text=self.t("sections_label_dat" if is_dat else "sections_label"))
+        self.lbl_elements.config(
+            text=self.t("elements_label_dat" if is_dat else "elements_label"))
         self.win_box.config(text=self.t("dialog_size_label"))
         self.coord_box.config(text=self.t("coord_label"))
-        self.hints_box.config(text=self.t("hints_label"))
-        self.lbl_hints.config(text=self.t("hint_text"))
+        self.lbl_hints_title.config(text=self.t("hints_label"))
+        self.lbl_hints.config(
+            text=self.t("hint_text_dat" if is_dat else "hint_text"))
         self.btn_save.config(text=self.t("btn_save"))
         self.btn_revert.config(text=self.t("btn_revert"))
+        self.btn_history.config(text=self.t("btn_history"))
+        self.btn_open_ext.config(text=self.t("btn_open_external"))
+        self.btn_add.config(text=self.t("btn_add"))
+        self.btn_edit.config(text=self.t("btn_edit"))
+        self.btn_delete.config(text=self.t("btn_delete"))
         if not self.file_path:
             self.status_var.set(self.t("status_open_hint"))
         self._update_dialog_size_entries()
@@ -827,11 +1590,35 @@ class DlgEditorApp:
     # --- Shortcuts ---------------------------------------------------------
 
     def _bind_shortcuts(self):
-        self.root.bind("<Control-o>", lambda _e: self.cmd_open())
-        self.root.bind("<Control-O>", lambda _e: self.cmd_open())
-        self.root.bind("<Control-s>", lambda _e: self.cmd_save())
-        self.root.bind("<Control-S>", lambda _e: self.cmd_save())
+        # Одна привязка на все сочетания с Ctrl: букву определяем по
+        # физической клавише (см. key_letter), поэтому раскладка не важна.
+        self.root.bind("<Control-KeyPress>", self._on_control_key)
         self.root.protocol("WM_DELETE_WINDOW", self.cmd_exit)
+
+    def _on_control_key(self, event):
+        letter = key_letter(event)
+        if letter == "o":
+            self.cmd_open()
+        elif letter == "s":
+            self.cmd_save()
+        elif letter == "z":
+            self.cmd_undo()
+        elif letter == "y":
+            self.cmd_redo()
+        elif letter == "h":
+            self.cmd_history()
+        elif letter == "c":
+            # Ctrl+C копирует имя только из списка секций и таблицы элементов;
+            # в полях ввода работает штатное копирование текста.
+            widget = self.root.focus_get()
+            if widget is self.section_listbox:
+                return self._copy_section_name()
+            if widget is self.element_tree:
+                return self._copy_element_name()
+            return None
+        else:
+            return None
+        return "break"
 
     # --- File commands -----------------------------------------------------
 
@@ -840,56 +1627,110 @@ class DlgEditorApp:
             return
         path = filedialog.askopenfilename(
             title=self.t("menu_open"),
-            filetypes=[("DLG files", "*.dlg"), ("All files", "*.*")],
+            filetypes=[("Disciples files", "*.dlg *.dat"),
+                       ("DLG files", "*.dlg"),
+                       ("Capital.dat", "*.dat"),
+                       ("All files", "*.*")],
         )
         if path:
             self._open_file(path)
 
+    def _detect_mode(self, path):
+        return MODE_DAT if path.lower().endswith(".dat") else MODE_DLG
+
     def _open_file(self, path):
+        mode = self._detect_mode(path)
         try:
-            lines, sections, line_ending = parse_dlg_file(path)
+            if mode == MODE_DAT:
+                sections, line_ending, trailing = parse_dat_file(path)
+                lines = []
+            else:
+                lines, sections, line_ending = parse_dlg_file(path)
+                trailing = 0
         except Exception as exc:
             messagebox.showerror(self.t("err_read_title"),
-                                  self.t("err_read_msg", err=exc))
+                                 self.t("err_read_msg", err=exc))
             return
+
+        mode_changed = mode != self.mode
+        self.mode = mode
         self.file_path = path
         self.lines = lines
         self.sections = sections
         self.line_ending = line_ending
+        self.trailing_blanks = trailing
         self.current_section = None
         self.selected_element = None
         self.dirty = False
+
+        self._apply_mode_ui()
+        if mode_changed:
+            self._configure_element_columns()
+        self._reset_history()
+
         self._update_title()
         self._refresh_section_list()
         self._clear_canvas()
         self._refresh_element_list()
         self._update_coord_entries()
         self._update_dialog_size_entries()
-        self.status_var.set(
-            self.t("status_loaded",
-                   fname=os.path.basename(path), count=len(sections)))
+        self._update_scrollregion()
+
+        fname = os.path.basename(path)
+        if mode == MODE_DAT:
+            layers = sum(len(s.layers) for s in sections)
+            self.status_var.set(self.t("status_loaded_dat", fname=fname,
+                                       count=len(sections), layers=layers))
+        else:
+            self.status_var.set(self.t("status_loaded", fname=fname,
+                                       count=len(sections)))
         self._save_settings()
+
+    def _apply_mode_ui(self):
+        """Показывает/прячет элементы UI, специфичные для режима."""
+        is_dat = self.mode == MODE_DAT
+        if is_dat:
+            self.filter_frame.grid_remove()
+            self.win_box.grid_remove()
+            self.layer_btns.grid()
+        else:
+            self.filter_frame.grid()
+            self.win_box.grid()
+            self.layer_btns.grid_remove()
+        self.lbl_sections.config(
+            text=self.t("sections_label_dat" if is_dat else "sections_label"))
+        self.lbl_elements.config(
+            text=self.t("elements_label_dat" if is_dat else "elements_label"))
+        self.lbl_hints.config(
+            text=self.t("hint_text_dat" if is_dat else "hint_text"))
 
     def cmd_save(self):
         if not self.file_path:
             return self.cmd_save_as()
         try:
-            write_dlg_file(self.file_path, self.lines, self.sections,
-                           self.line_ending)
+            if self.mode == MODE_DAT:
+                write_dat_file(self.file_path, self.sections,
+                               self.line_ending, self.trailing_blanks)
+            else:
+                write_dlg_file(self.file_path, self.lines, self.sections,
+                               self.line_ending)
         except Exception as exc:
             messagebox.showerror(self.t("err_write_title"),
-                                  self.t("err_write_msg", err=exc))
+                                 self.t("err_write_msg", err=exc))
             return
         self.dirty = False
+        self._on_saved()
         self._update_title()
         self.status_var.set(self.t("status_saved", path=self.file_path))
 
     def cmd_save_as(self):
         if not self.sections:
             return
+        ext = ".dat" if self.mode == MODE_DAT else ".dlg"
         path = filedialog.asksaveasfilename(
-            title=self.t("menu_save_as"), defaultextension=".dlg",
-            filetypes=[("DLG files", "*.dlg"), ("All files", "*.*")],
+            title=self.t("menu_save_as"), defaultextension=ext,
+            filetypes=[("DLG files", "*.dlg"), ("Capital.dat", "*.dat"),
+                       ("All files", "*.*")],
         )
         if not path:
             return
@@ -897,23 +1738,33 @@ class DlgEditorApp:
         self.cmd_save()
 
     def cmd_revert(self):
+        """Полный откат к содержимому файла на диске."""
         if not self.file_path:
             return
         old_section_name = (self.current_section.name
                             if self.current_section else None)
         self._open_file(self.file_path)
         if old_section_name:
-            for i, s in enumerate(self._filtered_sections):
-                if s.name == old_section_name:
-                    self.section_listbox.selection_clear(0, tk.END)
-                    self.section_listbox.selection_set(i)
-                    self.section_listbox.see(i)
-                    self.current_section = s
-                    self._draw_section()
-                    self._refresh_element_list()
-                    self._update_coord_entries()
-                    self._update_dialog_size_entries()
-                    break
+            self._select_section_by_name(old_section_name)
+
+    def cmd_open_external(self):
+        """Открывает текущий файл текстовым редактором ОС по умолчанию.
+
+        Если для расширения (.dat) редактор не назначен, Windows сама
+        предложит выбрать программу.
+        """
+        if not self.file_path or not os.path.isfile(self.file_path):
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(self.file_path)          # noqa: S606 (Windows only)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", self.file_path])
+            else:
+                subprocess.Popen(["xdg-open", self.file_path])
+        except Exception as exc:
+            messagebox.showerror(self.t("err_open_title"),
+                                 self.t("err_open_msg", err=exc))
 
     def cmd_exit(self):
         if not self._confirm_discard_changes():
@@ -932,15 +1783,6 @@ class DlgEditorApp:
         pad = ttk.Frame(win, padding=20)
         pad.pack(fill="both", expand=True)
 
-        # Иконка 64×64. Файл icon.png должен лежать рядом с exe / скриптом.
-        icon_path = os.path.join(
-            os.path.dirname(os.path.abspath(sys.argv[0])), "icon.png")
-        if os.path.isfile(icon_path):
-            self._about_icon = PhotoImage(file=icon_path)
-            icon_lbl = ttk.Label(pad, image=self._about_icon,
-                                  background=COLOR_BG_APP)
-            icon_lbl.pack(anchor="w", pady=(0, 8))
-
         ttk.Label(pad, text=self.t("about_name"),
                   font=("Segoe UI", 14, "bold")).pack(anchor="w")
         ttk.Label(pad, text=self.t("about_version"),
@@ -952,13 +1794,11 @@ class DlgEditorApp:
         # Ссылки из ABOUT_LINKS.
         for link_name, link_url in ABOUT_LINKS:
             if not link_name and not link_url:
-                # Пустая строка-разделитель.
                 ttk.Label(pad, text="").pack(anchor="w")
                 continue
-            if link_url.startswith("mailto:"):
-                display = f"{link_name}: {link_url[7:]}"
-            else:
-                display = f"{link_name}: {link_url}"
+            display = (f"{link_name}: {link_url[7:]}"
+                       if link_url.startswith("mailto:")
+                       else f"{link_name}: {link_url}")
             lbl = ttk.Label(pad, text=display, foreground=COLOR_SELECTION,
                             cursor="hand2",
                             font=("Segoe UI", 9, "underline"))
@@ -966,7 +1806,8 @@ class DlgEditorApp:
             lbl.bind("<Button-1>",
                      lambda _e, url=link_url: webbrowser.open(url))
 
-        ttk.Button(pad, text="OK", command=win.destroy).pack(pady=(14, 0))
+        ttk.Button(pad, text=self.t("btn_ok"),
+                   command=win.destroy).pack(pady=(14, 0))
 
     def _confirm_discard_changes(self):
         if not self.dirty:
@@ -988,10 +1829,312 @@ class DlgEditorApp:
             title += " *"
         self.root.title(title)
 
-    def _mark_dirty(self):
-        if not self.dirty:
-            self.dirty = True
-            self._update_title()
+    # --- Копирование имён (Ctrl+C / правая кнопка) -------------------------
+
+    def _copy_to_clipboard(self, text):
+        if not text:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update_idletasks()
+
+    def _copy_section_name(self):
+        """Копирует ИМЯ секции без размеров."""
+        sel = self.section_listbox.curselection()
+        if not sel or sel[0] >= len(self._filtered_sections):
+            return "break"
+        self._copy_to_clipboard(self._filtered_sections[sel[0]].name)
+        return "break"
+
+    def _on_section_right_click(self, event):
+        idx = self.section_listbox.nearest(event.y)
+        if idx < 0 or idx >= len(self._filtered_sections):
+            return
+        self.section_listbox.selection_clear(0, tk.END)
+        self.section_listbox.selection_set(idx)
+        self.section_listbox.event_generate("<<ListboxSelect>>")
+        self.section_menu.delete(0, tk.END)
+        self.section_menu.add_command(label=self.t("btn_copy"),
+                                      command=self._copy_section_name)
+        self.section_menu.tk_popup(event.x_root, event.y_root)
+
+    def _element_name_of(self, el):
+        """Имя для копирования: у слоя .dat — ID здания, иначе имя картинки."""
+        if isinstance(el, DatLayer):
+            return el.build_id or el.image or el.key
+        return getattr(el, "name", "")
+
+    def _copy_element_name(self):
+        sel = self.element_tree.selection()
+        if not sel or not self.current_section:
+            return "break"
+        elements = self.current_section.elements
+        idx = int(sel[0])
+        if idx < len(elements):
+            self._copy_to_clipboard(self._element_name_of(elements[idx]))
+        return "break"
+
+    def _on_element_right_click(self, event):
+        row = self.element_tree.identify_row(event.y)
+        if not row:
+            return
+        self.element_tree.selection_set(row)
+        self.element_menu.delete(0, tk.END)
+        self.element_menu.add_command(label=self.t("btn_copy"),
+                                      command=self._copy_element_name)
+        self.element_menu.tk_popup(event.x_root, event.y_root)
+
+    # --- История изменений -------------------------------------------------
+
+    def _hist_param(self, el):
+        """Значение колонки «Параметр»: NAME для .dlg, IMAGE для .dat."""
+        if isinstance(el, DatLayer):
+            return el.image or el.build_id or el.key
+        return getattr(el, "name", "")
+
+    @staticmethod
+    def _coords_text(coords):
+        """Координаты для колонок «Было» / «Стало»."""
+        return ",".join(str(int(c)) for c in coords)
+
+    def _commit_coords(self, sec, el, old):
+        """Запись в историю: изменение координат элемента / слоя."""
+        self._commit(sec.name, self._hist_param(el),
+                     self._coords_text(old),
+                     self._coords_text((el.x1, el.y1, el.x2, el.y2)))
+
+    def _commit_dlgsize(self, sec, old):
+        """Запись в историю: изменение размера окна DIALOG (old = (w, h))."""
+        self._commit(sec.name, self.t("hist_param_dlgsize"),
+                     f"{old[0]}×{old[1]}", f"{sec.x2}×{sec.y2}")
+
+    def _snapshot(self):
+        """Компактный слепок редактируемых данных текущего файла."""
+        if self.mode == MODE_DAT:
+            return ("dat", tuple(
+                (s.li_count, s.layer_count,
+                 tuple((li.key, tuple(li.fields)) for li in s.layerinfos),
+                 tuple((l.key, tuple(l.fields)) for l in s.layers))
+                for s in self.sections))
+        return ("dlg", tuple(
+            (s.x2, s.y2, s.w2, s.h2,
+             tuple((e.x1, e.y1, e.x2, e.y2) for e in s.elements))
+            for s in self.sections))
+
+    def _restore(self, snap):
+        kind, data = snap
+        if kind == "dat":
+            for sec, (li_count, layer_count, lis, layers) in zip(self.sections,
+                                                                 data):
+                sec.li_count = li_count
+                sec.layer_count = layer_count
+                sec.layerinfos = [DatLayerInfo(k, f) for k, f in lis]
+                sec.layers = [DatLayer(k, f) for k, f in layers]
+            # Объекты слоёв пересозданы — старое выделение больше не валидно.
+            self.selected_element = None
+        else:
+            for sec, (x2, y2, w2, h2, els) in zip(self.sections, data):
+                sec.x2, sec.y2, sec.w2, sec.h2 = x2, y2, w2, h2
+                for el, (a, b, c, d) in zip(sec.elements, els):
+                    el.x1, el.y1, el.x2, el.y2 = a, b, c, d
+
+        self._refresh_section_list()
+        self._refresh_element_list()
+        self._update_coord_entries()
+        self._update_dialog_size_entries()
+        self._draw_section()
+
+    def _reset_history(self):
+        self.history = []
+        self.hist_index = 0
+        self.saved_index = 0
+        self.hist_selected = 0
+        self.base_snapshot = self._snapshot()
+        self._refresh_history_window()
+
+    def _commit(self, section, param, old_value, new_value):
+        """Фиксирует изменение в истории (вызывается ПОСЛЕ правки данных)."""
+        after = self._snapshot()
+        before = (self.history[self.hist_index - 1].after
+                  if self.hist_index else self.base_snapshot)
+        if after == before:
+            return
+        # Новая ветка истории затирает «отменённые» действия.
+        del self.history[self.hist_index:]
+        self.history.append(
+            HistoryEntry(section, param, old_value, new_value, before, after))
+        self.hist_index = len(self.history)
+        self.hist_selected = self.hist_index
+        self._update_dirty()
+        self._refresh_history_window()
+
+    def _update_dirty(self):
+        self.dirty = self.hist_index != self.saved_index
+        self._update_title()
+
+    def _on_saved(self):
+        """Вызывается после успешной записи файла: история сохраняется целиком."""
+        self.saved_index = self.hist_index
+        self._refresh_history_window()
+
+    def cmd_undo(self):
+        if self.hist_index <= 0:
+            return
+        entry = self.history[self.hist_index - 1]
+        self.hist_index -= 1
+        self.hist_selected = self.hist_index
+        self._restore(entry.before)
+        self._update_dirty()
+        self._refresh_history_window()
+
+    def cmd_redo(self):
+        if self.hist_index >= len(self.history):
+            return
+        entry = self.history[self.hist_index]
+        self.hist_index += 1
+        self.hist_selected = self.hist_index
+        self._restore(entry.after)
+        self._update_dirty()
+        self._refresh_history_window()
+
+    def _goto_history(self, index):
+        """index = 0 — базовое состояние, i — состояние после i-го действия."""
+        index = max(0, min(len(self.history), index))
+        if index == self.hist_index:
+            return
+        snap = (self.base_snapshot if index == 0
+                else self.history[index - 1].after)
+        self.hist_index = index
+        self.hist_selected = index
+        self._restore(snap)
+        self._update_dirty()
+        self._refresh_history_window()
+
+    def cmd_history(self):
+        if self._history_win is not None and self._history_win.winfo_exists():
+            self._history_win.lift()
+            self._refresh_history_window()
+            return
+        win = tk.Toplevel(self.root)
+        self._history_win = win
+        win.title(self.t("hist_title"))
+        win.configure(bg=COLOR_BG_APP)
+        win.geometry("680x420")
+        win.transient(self.root)
+
+        frame = ttk.Frame(win, padding=8)
+        frame.pack(fill="both", expand=True)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        # Таблица истории собрана из ячеек-Label: только так получаются
+        # настоящие линии-границы колонок (у ttk.Treeview сетки нет).
+        canvas = tk.Canvas(frame, bg=COLOR_INPUT_BG, bd=0,
+                           highlightthickness=1,
+                           highlightbackground=COLOR_BORDER_DARK)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=sb.set)
+        self.hist_canvas = canvas
+
+        self.hist_table = tk.Frame(canvas, bg=COLOR_INPUT_BG)
+        self.hist_table_id = canvas.create_window(
+            (0, 0), window=self.hist_table, anchor="nw")
+        self.hist_table.bind(
+            "<Configure>",
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfigure(self.hist_table_id, width=e.width))
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1,
+                                                  "units"))
+
+        btns = ttk.Frame(frame)
+        btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        btns.columnconfigure(0, weight=1)
+        ttk.Button(btns, text=self.t("hist_revert_to"),
+                   command=self._history_revert_clicked).grid(
+                       row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(btns, text=self.t("btn_close"),
+                   command=win.destroy).grid(row=0, column=1)
+
+        def _on_close():
+            self._history_win = None
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_close)
+        win.bind("<Control-KeyPress>", self._on_control_key)
+        self._refresh_history_window()
+
+    def _hist_cell(self, row, col, text, header=False, index=None):
+        """Одна ячейка таблицы истории: границы + текст по центру."""
+        bg = COLOR_BUTTON_BG if header else COLOR_INPUT_BG
+        cell = tk.Label(self.hist_table, text=text, bg=bg, fg=COLOR_TEXT,
+                        anchor="center", justify="center",
+                        relief="solid", borderwidth=1, padx=4, pady=2,
+                        font=("Segoe UI", 9, "bold" if header else "normal"))
+        cell.grid(row=row, column=col, sticky="nsew")
+        if index is not None:
+            # Клик по ЛЮБОЙ колонке строки: одиночный — выделить,
+            # двойной — откатиться к этому состоянию.
+            cell.bind("<Button-1>", lambda _e, i=index: self._hist_select(i))
+            cell.bind("<Double-1>", lambda _e, i=index: self._goto_history(i))
+            self.hist_cells.setdefault(index, []).append(cell)
+
+    def _hist_select(self, index):
+        """Выделение строки: таблицу НЕ пересобираем (иначе двойной клик не
+        успевает сработать по уничтоженной ячейке) — только перекрашиваем."""
+        self.hist_selected = index
+        self._hist_apply_selection()
+
+    def _hist_apply_selection(self):
+        for i, cells in self.hist_cells.items():
+            selected = (i == self.hist_selected)
+            bg = COLOR_SELECTION if selected else COLOR_INPUT_BG
+            fg = "#ffffff" if selected else COLOR_TEXT
+            for cell in cells:
+                cell.configure(bg=bg, fg=fg)
+
+    def _refresh_history_window(self):
+        win = self._history_win
+        if win is None or not win.winfo_exists():
+            return
+        table = self.hist_table
+        for child in table.winfo_children():
+            child.destroy()
+        self.hist_cells = {}
+        for col, weight in enumerate((0, 3, 4, 3, 3)):
+            table.columnconfigure(col, weight=weight)
+
+        if self.hist_selected is None or self.hist_selected > len(self.history):
+            self.hist_selected = self.hist_index
+
+        # Шапка таблицы.
+        headers = ("", self.t("hist_col_sec"), self.t("hist_col_param"),
+                   self.t("hist_col_before"), self.t("hist_col_after"))
+        for col, text in enumerate(headers):
+            self._hist_cell(0, col, text, header=True)
+
+        mark = self.t("hist_current_mark")
+        rows = [(self.t("hist_initial"), "", "", "")]
+        rows += [(e.section, e.param, e.old_value, e.new_value)
+                 for e in self.history]
+        for i, values in enumerate(rows):
+            self._hist_cell(i + 1, 0, mark if i == self.hist_index else "",
+                            index=i)
+            for col, text in enumerate(values, start=1):
+                self._hist_cell(i + 1, col, text, index=i)
+        self._hist_apply_selection()
+
+        table.update_idletasks()
+        self.hist_canvas.configure(scrollregion=self.hist_canvas.bbox("all"))
+
+    def _history_revert_clicked(self):
+        if self.hist_selected is None:
+            return
+        self._goto_history(self.hist_selected)
 
     # --- Section list ------------------------------------------------------
 
@@ -1018,13 +2161,18 @@ class DlgEditorApp:
         for s in self.sections:
             if query and query not in s.name.lower():
                 continue
-            if not self._check_filter(s.x2, self.filter_w_op, self.filter_w_val):
-                continue
-            if not self._check_filter(s.y2, self.filter_h_op, self.filter_h_val):
-                continue
+            if self.mode == MODE_DLG:
+                if not self._check_filter(s.x2, self.filter_w_op,
+                                          self.filter_w_val):
+                    continue
+                if not self._check_filter(s.y2, self.filter_h_op,
+                                          self.filter_h_val):
+                    continue
+                label = f"{s.name}   [{s.x2}×{s.y2}]"
+            else:
+                label = f"{s.name}   [{len(s.layers)}]"
             self._filtered_sections.append(s)
-            self.section_listbox.insert(
-                tk.END, f"{s.name}   [{s.x2}×{s.y2}]")
+            self.section_listbox.insert(tk.END, label)
         if self.current_section in self._filtered_sections:
             idx = self._filtered_sections.index(self.current_section)
             self.section_listbox.selection_set(idx)
@@ -1032,7 +2180,7 @@ class DlgEditorApp:
 
     def _on_section_select(self, _ev):
         sel = self.section_listbox.curselection()
-        if not sel:
+        if not sel or sel[0] >= len(self._filtered_sections):
             return
         section = self._filtered_sections[sel[0]]
         if section is self.current_section:
@@ -1045,7 +2193,6 @@ class DlgEditorApp:
         self._update_dialog_size_entries()
 
     def _select_section_by_name(self, name):
-        """Находит секцию по имени и выбирает её в списке."""
         for i, s in enumerate(self._filtered_sections):
             if s.name == name:
                 self.section_listbox.selection_clear(0, tk.END)
@@ -1060,17 +2207,20 @@ class DlgEditorApp:
 
     # --- Element list ------------------------------------------------------
 
+    def _element_row(self, el):
+        if self.mode == MODE_DAT:
+            return (el.z, el.build_id, el.image, el.x1, el.y1, el.x2, el.y2)
+        return (el.kind, el.name, el.x1, el.y1, el.x2, el.y2)
+
     def _refresh_element_list(self):
         for item in self.element_tree.get_children():
             self.element_tree.delete(item)
         if not self.current_section:
             return
         for i, el in enumerate(self.current_section.elements):
-            self.element_tree.insert(
-                "", "end", iid=str(i),
-                values=(el.kind, el.name, el.x1, el.y1, el.x2, el.y2))
-        if isinstance(self.selected_element, DlgElement) and \
-                self.selected_element in self.current_section.elements:
+            self.element_tree.insert("", "end", iid=str(i),
+                                     values=self._element_row(el))
+        if self.selected_element in self.current_section.elements:
             i = self.current_section.elements.index(self.selected_element)
             self.element_tree.selection_set(str(i))
             self.element_tree.see(str(i))
@@ -1087,27 +2237,39 @@ class DlgEditorApp:
         self._redraw_selection_highlight()
 
     def _refresh_selected_row(self):
-        if not isinstance(self.selected_element, DlgElement) or \
-                not self.current_section:
-            return
-        idx = self.current_section.elements.index(self.selected_element)
         el = self.selected_element
-        self.element_tree.item(
-            str(idx),
-            values=(el.kind, el.name, el.x1, el.y1, el.x2, el.y2))
+        if el is HIT_DIALOG or el is None or not self.current_section:
+            return
+        if el not in self.current_section.elements:
+            return
+        idx = self.current_section.elements.index(el)
+        self.element_tree.item(str(idx), values=self._element_row(el))
 
     # --- Coord panel -------------------------------------------------------
 
+    def _selected_editable(self):
+        """Выбранный элемент/слой (не сам DIALOG)."""
+        el = self.selected_element
+        if el is None or el is HIT_DIALOG:
+            return None
+        return el
+
+    def _bounds(self):
+        """Границы, в которых живут элементы текущей секции."""
+        if self.mode == MODE_DAT:
+            return CANVAS_W, CANVAS_H
+        sec = self.current_section
+        return (sec.x2, sec.y2) if sec else (CANVAS_W, CANVAS_H)
+
     def _update_coord_entries(self):
-        el = self.selected_element if isinstance(self.selected_element,
-                                                 DlgElement) else None
+        el = self._selected_editable()
         for label in ("X1", "Y1", "X2", "Y2"):
             self.coord_vars[label].set(
                 getattr(el, label.lower()) if el else 0)
 
     def _apply_coord_entries(self):
-        el = self.selected_element
-        if not isinstance(el, DlgElement) or not self.current_section:
+        el = self._selected_editable()
+        if el is None or not self.current_section:
             return
         try:
             x1 = int(self.coord_vars["X1"].get())
@@ -1119,27 +2281,48 @@ class DlgEditorApp:
             return
         if x2 < x1: x1, x2 = x2, x1
         if y2 < y1: y1, y2 = y2, y1
-        sec = self.current_section
-        x1 = max(0, min(sec.x2, x1)); x2 = max(0, min(sec.x2, x2))
-        y1 = max(0, min(sec.y2, y1)); y2 = max(0, min(sec.y2, y2))
-        if (x1, y1, x2, y2) == (el.x1, el.y1, el.x2, el.y2):
+        bw, bh = self._bounds()
+        # В Capital.dat допустимо -1 (слой без позиционирования).
+        lo = -1 if self.mode == MODE_DAT else 0
+        x1 = max(lo, min(bw, x1)); x2 = max(lo, min(bw, x2))
+        y1 = max(lo, min(bh, y1)); y2 = max(lo, min(bh, y2))
+        old = (el.x1, el.y1, el.x2, el.y2)
+        if (x1, y1, x2, y2) == old:
             self._update_coord_entries()
             return
         el.x1, el.y1, el.x2, el.y2 = x1, y1, x2, y2
-        self._mark_dirty()
+        self._apply_secondary_shift(el, old)
+        self._commit_coords(self.current_section, el, old)
         self._update_coord_entries()
         self._refresh_selected_row()
         self._draw_section()
+
+    def _apply_secondary_shift(self, el, old):
+        """Сдвигает вторичные координаты слоя .dat вслед за рамкой.
+
+        Работает только при включённой опции «Изменять вторичные координаты
+        в .dat» и только при чистом перемещении (размер рамки не изменился):
+        картинка не масштабируется, поэтому при растягивании рамки её
+        положение остаётся прежним.
+        """
+        if not self.dat_secondary or self.mode != MODE_DAT:
+            return
+        if not isinstance(el, DatLayer) or not old:
+            return
+        ox1, oy1, ox2, oy2 = old
+        if (el.x2 - el.x1, el.y2 - el.y1) != (ox2 - ox1, oy2 - oy1):
+            return                      # это изменение размера, а не перенос
+        el.shift_secondary(el.x1 - ox1, el.y1 - oy1)
 
     # --- Dialog size panel -------------------------------------------------
 
     def _update_dialog_size_entries(self):
         sec = self.current_section
-        if sec is None:
+        if sec is None or self.mode == MODE_DAT:
             self.dlg_w_var.set(0)
             self.dlg_h_var.set(0)
             self.dlg_size_hint.config(text=self.t("dlg_size_fixed"),
-                                       foreground=COLOR_TEXT_MUTED)
+                                      foreground=COLOR_TEXT_MUTED)
             return
         self.dlg_w_var.set(sec.x2)
         self.dlg_h_var.set(sec.y2)
@@ -1149,11 +2332,11 @@ class DlgEditorApp:
                 foreground=COLOR_WARN)
         else:
             self.dlg_size_hint.config(text=self.t("dlg_size_fixed"),
-                                       foreground=COLOR_TEXT_MUTED)
+                                      foreground=COLOR_TEXT_MUTED)
 
     def _apply_dialog_size(self):
         sec = self.current_section
-        if sec is None:
+        if sec is None or self.mode == MODE_DAT:
             return
         try:
             w = int(self.dlg_w_var.get())
@@ -1170,9 +2353,10 @@ class DlgEditorApp:
         if (w, h) == (sec.x2, sec.y2) and (w, h) == (sec.w2, sec.h2):
             self._update_dialog_size_entries()
             return
+        old = (sec.x2, sec.y2)
         sec.x2, sec.y2 = w, h
         sec.w2, sec.h2 = w, h
-        self._mark_dirty()
+        self._commit_dlgsize(sec, old)
         self._update_dialog_size_entries()
         self._refresh_section_list()
         self._draw_section()
@@ -1184,16 +2368,57 @@ class DlgEditorApp:
         self.element_to_rect = {}
         self.dialog_rect_id = None
 
+    def _content_size(self):
+        """Размер полезной области холста."""
+        if self.mode == MODE_DAT:
+            return CANVAS_W, CANVAS_H
+        sec = self.current_section
+        if not sec:
+            return CANVAS_W, CANVAS_H
+        return sec.x2 + 20, sec.y2 + 20
+
+    def _update_scrollregion(self):
+        """Холст занимает всё свободное место; прокрутка — только при нехватке."""
+        cw = max(1, self.canvas.winfo_width())
+        ch = max(1, self.canvas.winfo_height())
+        content_w, content_h = self._content_size()
+        self.canvas.configure(
+            scrollregion=(0, 0, max(content_w, cw), max(content_h, ch)))
+        if content_w > cw:
+            self.h_scroll.grid()
+        else:
+            self.h_scroll.grid_remove()
+            self.canvas.xview_moveto(0)
+        if content_h > ch:
+            self.v_scroll.grid()
+        else:
+            self.v_scroll.grid_remove()
+            self.canvas.yview_moveto(0)
+
+    def _draw_order(self):
+        """Порядок отрисовки: в .dat — по возрастанию Z."""
+        sec = self.current_section
+        if not sec:
+            return []
+        if self.mode == MODE_DAT:
+            return sorted(sec.layers, key=lambda l: l.z)
+        return list(sec.elements)
+
     def _draw_section(self):
         self._clear_canvas()
         sec = self.current_section
         if not sec:
-            self.canvas.configure(scrollregion=(0, 0, CANVAS_W, CANVAS_H))
+            self._update_scrollregion()
             return
+        if self.mode == MODE_DAT:
+            self._draw_capital(sec)
+        else:
+            self._draw_dialog(sec)
+        self._redraw_selection_highlight()
+        self._update_scrollregion()
+
+    def _draw_dialog(self, sec):
         sw, sh = sec.x2, sec.y2
-        self.canvas.configure(scrollregion=(0, 0,
-                                             max(sw + 20, CANVAS_W),
-                                             max(sh + 20, CANVAS_H)))
         self.dialog_rect_id = self.canvas.create_rectangle(
             0, 0, sw, sh, outline=COLOR_DIALOG_FRAME, width=1,
             fill=COLOR_BG_WINDOW)
@@ -1202,7 +2427,28 @@ class DlgEditorApp:
             fill=COLOR_TEXT, font=("Segoe UI", 9, "bold"))
         for el in sec.elements:
             self._draw_element(el)
-        self._redraw_selection_highlight()
+
+    def _draw_capital(self, sec):
+        """Экран столицы: фон 800×600 и слои зданий по возрастанию Z."""
+        self.dialog_rect_id = self.canvas.create_rectangle(
+            0, 0, CANVAS_W, CANVAS_H, outline=COLOR_DIALOG_FRAME, width=1,
+            fill=COLOR_CAPITAL_BG)
+        self.canvas.create_text(
+            6, 4, text=f"[{sec.name}]  ({CANVAS_W}×{CANVAS_H})", anchor="nw",
+            fill="#e8e4d8", font=("Segoe UI", 9, "bold"))
+        for layer in self._draw_order():
+            if not layer.drawable():
+                continue           # -1/0 — слой без позиционирования
+            fill = COLOR_LAYER_FILL if layer.build_id else COLOR_LAYER_SYS
+            rect = self.canvas.create_rectangle(
+                layer.x1, layer.y1, layer.x2, layer.y2,
+                outline=COLOR_LAYER_EDGE, fill=fill, width=1)
+            self.element_to_rect[layer] = rect
+            if layer.x2 - layer.x1 >= 34 and layer.y2 - layer.y1 >= 12:
+                self.canvas.create_text(
+                    (layer.x1 + layer.x2) / 2, (layer.y1 + layer.y2) / 2,
+                    text=layer.image, anchor="center",
+                    fill=COLOR_TEXT, font=("Segoe UI", 7))
 
     def _draw_element(self, el):
         x1, y1, x2, y2 = el.x1, el.y1, el.x2, el.y2
@@ -1212,14 +2458,10 @@ class DlgEditorApp:
                 x1, y1, x2, y2, outline=COLOR_BORDER_DARK,
                 fill=COLOR_BUTTON_BG, width=1)
             self.canvas.create_line(x1, y1, x2 - 1, y1,
-                                     fill=COLOR_BORDER_LIGHT)
+                                    fill=COLOR_BORDER_LIGHT)
             self.canvas.create_line(x1, y1, x1, y2 - 1,
-                                     fill=COLOR_BORDER_LIGHT)
-        elif kind == "EDIT":
-            rect = self.canvas.create_rectangle(
-                x1, y1, x2, y2, outline=COLOR_BORDER_DARK,
-                fill=COLOR_INPUT_BG, width=1)
-        elif kind in ("LBOX", "TLBOX"):
+                                    fill=COLOR_BORDER_LIGHT)
+        elif kind in ("EDIT", "LBOX", "TLBOX", "SPIN"):
             rect = self.canvas.create_rectangle(
                 x1, y1, x2, y2, outline=COLOR_BORDER_DARK,
                 fill=COLOR_INPUT_BG, width=1)
@@ -1233,41 +2475,35 @@ class DlgEditorApp:
                 fill=COLOR_BG_WINDOW, width=1)
             self.canvas.create_line(x1, y1, x2, y2, fill=COLOR_BORDER_MED)
             self.canvas.create_line(x1, y2, x2, y1, fill=COLOR_BORDER_MED)
-        elif kind == "SPIN":
-            rect = self.canvas.create_rectangle(
-                x1, y1, x2, y2, outline=COLOR_BORDER_DARK,
-                fill=COLOR_INPUT_BG, width=1)
         else:
             rect = self.canvas.create_rectangle(
                 x1, y1, x2, y2, outline=COLOR_BORDER_DARK,
                 fill=COLOR_BUTTON_BG, width=1)
         self.element_to_rect[el] = rect
-        w, h = x2 - x1, y2 - y1
-        if w >= 30 and h >= 12:
+        if x2 - x1 >= 30 and y2 - y1 >= 12:
             self.canvas.create_text(
-                (x1 + x2) / 2, (y1 + y2) / 2,
-                text=el.name, anchor="center",
+                (x1 + x2) / 2, (y1 + y2) / 2, text=el.name, anchor="center",
                 fill=COLOR_TEXT, font=("Segoe UI", 7))
 
     def _redraw_selection_highlight(self):
         self.canvas.delete("selection")
-        for el, rect in self.element_to_rect.items():
+        for rect in self.element_to_rect.values():
             self.canvas.itemconfigure(rect, width=1)
         if self.dialog_rect_id is not None:
             self.canvas.itemconfigure(self.dialog_rect_id,
-                                       outline=COLOR_DIALOG_FRAME, width=1)
+                                      outline=COLOR_DIALOG_FRAME, width=1)
         sel = self.selected_element
-        if sel is HIT_DIALOG and self.current_section:
+        if sel is HIT_DIALOG and self.current_section and self.mode == MODE_DLG:
             sec = self.current_section
             self.canvas.itemconfigure(self.dialog_rect_id,
-                                       outline=COLOR_SELECTION, width=2)
+                                      outline=COLOR_SELECTION, width=2)
             h = HANDLE_SIZE
             self.canvas.create_rectangle(
                 sec.x2 - h, sec.y2 - h, sec.x2, sec.y2,
                 fill=COLOR_SELECTION, outline=COLOR_BORDER_DARK,
                 tags=("selection",))
             return
-        if isinstance(sel, DlgElement) and sel in self.element_to_rect:
+        if sel is not None and sel in self.element_to_rect:
             rect = self.element_to_rect[sel]
             self.canvas.itemconfigure(rect, outline=COLOR_SELECTION, width=2)
             self.canvas.tag_raise(rect)
@@ -1313,20 +2549,22 @@ class DlgEditorApp:
         sec = self.current_section
         if not sec:
             return None, HIT_NONE
-        if isinstance(self.selected_element, DlgElement):
-            hit = self._hit_test_rect(
-                self.selected_element.x1, self.selected_element.y1,
-                self.selected_element.x2, self.selected_element.y2, cx, cy)
+        sel = self._selected_editable()
+        if sel is not None and sel in self.element_to_rect:
+            hit = self._hit_test_rect(sel.x1, sel.y1, sel.x2, sel.y2, cx, cy)
             if hit:
-                return self.selected_element, hit
-        for el in reversed(sec.elements):
+                return sel, hit
+        for el in reversed(self._draw_order()):
+            if el not in self.element_to_rect:
+                continue          # непозиционируемый слой .dat
             hit = self._hit_test_rect(el.x1, el.y1, el.x2, el.y2, cx, cy)
             if hit:
                 return el, hit
-        hit = self._hit_test_rect(0, 0, sec.x2, sec.y2, cx, cy,
-                                  only_right_bottom=True)
-        if hit and (hit & (HIT_R | HIT_B)):
-            return HIT_DIALOG, hit
+        if self.mode == MODE_DLG:
+            hit = self._hit_test_rect(0, 0, sec.x2, sec.y2, cx, cy,
+                                      only_right_bottom=True)
+            if hit and (hit & (HIT_R | HIT_B)):
+                return HIT_DIALOG, hit
         return None, HIT_NONE
 
     def _cursor_for_hit(self, hit):
@@ -1349,6 +2587,7 @@ class DlgEditorApp:
         self.canvas.config(cursor=self._cursor_for_hit(hit) if target else "")
 
     def _on_canvas_press(self, event):
+        self.canvas.focus_set()
         cx, cy = self._canvas_coords(event)
         target, hit = self._find_target_at(cx, cy)
         if not target:
@@ -1358,11 +2597,11 @@ class DlgEditorApp:
             self.element_tree.selection_remove(self.element_tree.selection())
             return
         if target is HIT_DIALOG:
+            sec = self.current_section
             self.selected_element = HIT_DIALOG
             self.element_tree.selection_remove(self.element_tree.selection())
             self._update_coord_entries()
             self._redraw_selection_highlight()
-            sec = self.current_section
             self.drag_target = HIT_DIALOG
             self.drag_mode = hit
             self.drag_start_x = cx
@@ -1381,6 +2620,8 @@ class DlgEditorApp:
         self.drag_start_x = cx
         self.drag_start_y = cy
         self.drag_orig = (target.x1, target.y1, target.x2, target.y2)
+        self.drag_orig_img = ((target.img_x, target.img_y)
+                              if isinstance(target, DatLayer) else None)
 
     def _on_canvas_drag(self, event):
         if self.drag_mode == HIT_NONE or self.drag_target is None:
@@ -1409,7 +2650,7 @@ class DlgEditorApp:
             return
 
         el = self.drag_target
-        sw, sh = sec.x2, sec.y2
+        sw, sh = self._bounds()
         if self.drag_mode == HIT_INSIDE:
             w = ox2 - ox1
             h = oy2 - oy1
@@ -1417,6 +2658,11 @@ class DlgEditorApp:
             ny1 = max(0, min(sh - h, oy1 + dy))
             el.x1, el.y1 = int(nx1), int(ny1)
             el.x2, el.y2 = el.x1 + w, el.y1 + h
+            # Вторичные координаты (картинка) едут вместе с рамкой.
+            if (self.dat_secondary and self.mode == MODE_DAT
+                    and isinstance(el, DatLayer) and self.drag_orig_img):
+                el.img_x = self.drag_orig_img[0] + (el.x1 - ox1)
+                el.img_y = self.drag_orig_img[1] + (el.y1 - oy1)
         else:
             nx1, ny1, nx2, ny2 = ox1, oy1, ox2, oy2
             if self.drag_mode & HIT_L: nx1 = max(0, min(ox2 - 1, ox1 + dx))
@@ -1439,18 +2685,288 @@ class DlgEditorApp:
             return
         sec = self.current_section
         if self.drag_target is HIT_DIALOG:
-            ox1, oy1, ox2, oy2 = self.drag_orig
+            _, _, ox2, oy2 = self.drag_orig
             if (sec.x2, sec.y2) != (ox2, oy2):
-                self._mark_dirty()
+                self._commit_dlgsize(sec, (ox2, oy2))
                 self._refresh_section_list()
         else:
             el = self.drag_target
-            if self.drag_orig != (el.x1, el.y1, el.x2, el.y2):
-                self._mark_dirty()
+            old = self.drag_orig
+            if old != (el.x1, el.y1, el.x2, el.y2):
+                self._commit_coords(sec, el, old)
         self.drag_mode = HIT_NONE
         self.drag_target = None
         self.drag_orig = None
+        self.drag_orig_img = None
         self._draw_section()
+
+    # --- Capital.dat: добавление / изменение / удаление слоёв ---------------
+
+    def cmd_layer_add(self):
+        if self.mode != MODE_DAT or not self.current_section:
+            return
+        sec = self.current_section
+        base = self._selected_editable()      # за образец берём выбранный слой
+        if isinstance(base, DatLayer):
+            extra = list(base.extra)
+            coords = (base.x1, base.y1, base.x2, base.y2)
+        else:
+            extra = ["0", "0", "0", "", "0", "0", "0"]
+            coords = (0, 0, 100, 100)
+        data = LayerDialog(self, sec, title=self.t("layer_add_title"),
+                           z=sec.next_free_z(), build_id="", image="",
+                           extra=extra, coords=coords,
+                           offer_layerinfo=True).result
+        if not data:
+            return
+        layer = DatLayer.make(data["z"], data["build_id"], data["image"],
+                              data["extra"], data["coords"])
+        sec.layers.append(layer)
+        sec.layer_count += 1
+        if data["layerinfo"] and data["build_id"] and \
+                not sec.has_layerinfo(data["build_id"]):
+            sec.layerinfos.append(DatLayerInfo(
+                sec.next_layerinfo_key(), ["0", data["build_id"], ""]))
+            sec.li_count += 1
+        self.selected_element = layer
+        self._commit(sec.name, self._hist_param(layer),
+                     self.t("hist_none"),
+                     self._coords_text((layer.x1, layer.y1,
+                                        layer.x2, layer.y2)))
+        self.selected_element = layer
+        self._refresh_section_list()
+        self._refresh_element_list()
+        self._draw_section()
+        self._update_coord_entries()
+
+    def cmd_layer_edit(self):
+        if self.mode != MODE_DAT or not self.current_section:
+            return
+        layer = self._selected_editable()
+        if not isinstance(layer, DatLayer):
+            messagebox.showinfo(self.t("layer_edit_title"),
+                                self.t("no_selection"))
+            return
+        sec = self.current_section
+        data = LayerDialog(self, sec, title=self.t("layer_edit_title"),
+                           z=layer.z, build_id=layer.build_id,
+                           image=layer.image, extra=list(layer.extra),
+                           coords=(layer.x1, layer.y1, layer.x2, layer.y2),
+                           offer_layerinfo=not sec.has_layerinfo(layer.build_id),
+                           exclude=layer).result
+        if not data:
+            return
+        old = (layer.x1, layer.y1, layer.x2, layer.y2)
+        old_extra = list(layer.extra)
+        layer.key = f"LAYER_{data['z']:02d}"
+        layer.build_id = data["build_id"]
+        layer.image = data["image"]
+        layer.extra = data["extra"]
+        layer.x1, layer.y1, layer.x2, layer.y2 = data["coords"]
+        # Вторичные координаты трогаем, только если пользователь не правил
+        # поле «Прочие поля» вручную — иначе его значение приоритетнее.
+        if list(data["extra"]) == old_extra:
+            self._apply_secondary_shift(layer, old)
+        if data["layerinfo"] and data["build_id"] and \
+                not sec.has_layerinfo(data["build_id"]):
+            sec.layerinfos.append(DatLayerInfo(
+                sec.next_layerinfo_key(), ["0", data["build_id"], ""]))
+            sec.li_count += 1
+        self._commit_coords(sec, layer, old)
+        self.selected_element = layer
+        self._refresh_element_list()
+        self._draw_section()
+        self._update_coord_entries()
+
+    def cmd_layer_delete(self):
+        if self.mode != MODE_DAT or not self.current_section:
+            return
+        layer = self._selected_editable()
+        if not isinstance(layer, DatLayer):
+            messagebox.showinfo(self.t("del_title"), self.t("no_selection"))
+            return
+        sec = self.current_section
+        name = self._element_name_of(layer)
+        has_li = sec.has_layerinfo(layer.build_id)
+        confirm = ConfirmDeleteDialog(
+            self,
+            message=self.t("del_msg", name=layer.key, image=name),
+            option_text=(self.t("del_layerinfo", build=layer.build_id)
+                         if has_li else None),
+        )
+        if not confirm.ok:
+            return
+
+        sec.layers.remove(layer)
+        sec.layer_count -= 1
+        if has_li and confirm.option:
+            bid = layer.build_id.strip().upper()
+            keep = [li for li in sec.layerinfos
+                    if (li.build_id or "").strip().upper() != bid]
+            sec.li_count -= (len(sec.layerinfos) - len(keep))
+            sec.layerinfos = keep
+        old = (layer.x1, layer.y1, layer.x2, layer.y2)
+        self.selected_element = None
+        self._commit(sec.name, self._hist_param(layer),
+                     self._coords_text(old), self.t("hist_none"))
+        self._refresh_section_list()
+        self._refresh_element_list()
+        self._draw_section()
+        self._update_coord_entries()
+
+
+# =============================================================================
+# Диалог редактирования слоя Capital.dat
+# =============================================================================
+
+class LayerDialog:
+    def __init__(self, app, section, title, z, build_id, image, extra, coords,
+                 offer_layerinfo=False, exclude=None):
+        self.app = app
+        self.section = section
+        self.exclude = exclude
+        self.result = None
+
+        win = tk.Toplevel(app.root)
+        self.win = win
+        win.title(title)
+        win.configure(bg=COLOR_BG_APP)
+        win.resizable(False, False)
+        win.transient(app.root)
+        win.grab_set()
+
+        pad = ttk.Frame(win, padding=12)
+        pad.pack(fill="both", expand=True)
+        pad.columnconfigure(1, weight=1)
+
+        self.v_z = tk.StringVar(value=str(z))
+        self.v_build = tk.StringVar(value=build_id)
+        self.v_image = tk.StringVar(value=image)
+        self.v_coords = tk.StringVar(value=", ".join(str(c) for c in coords))
+        self.v_extra = tk.StringVar(value=",".join(extra))
+        self.v_layerinfo = tk.BooleanVar(value=bool(offer_layerinfo))
+
+        rows = (
+            ("fld_z", self.v_z),
+            ("fld_build", self.v_build),
+            ("fld_image", self.v_image),
+            ("fld_coords", self.v_coords),
+            ("fld_extra", self.v_extra),
+        )
+        for r, (key, var) in enumerate(rows):
+            ttk.Label(pad, text=app.t(key)).grid(row=r, column=0, sticky="w",
+                                                 padx=(0, 8), pady=3)
+            ttk.Entry(pad, textvariable=var, width=34).grid(
+                row=r, column=1, sticky="ew", pady=3)
+
+        chk = ttk.Checkbutton(pad, text=app.t("fld_layerinfo"),
+                              variable=self.v_layerinfo)
+        chk.grid(row=len(rows), column=0, columnspan=2, sticky="w", pady=(6, 0))
+        if not offer_layerinfo:
+            self.v_layerinfo.set(False)
+            chk.state(["disabled"])
+
+        btns = ttk.Frame(pad)
+        btns.grid(row=len(rows) + 1, column=0, columnspan=2, sticky="e",
+                  pady=(12, 0))
+        ttk.Button(btns, text=app.t("btn_ok"), command=self._ok,
+                   style="Save.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(btns, text=app.t("btn_cancel"),
+                   command=win.destroy).pack(side="left")
+
+        win.bind("<Return>", lambda _e: self._ok())
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        win.geometry(f"+{app.root.winfo_rootx() + 120}"
+                     f"+{app.root.winfo_rooty() + 120}")
+        app.root.wait_window(win)
+
+    def _ok(self):
+        app = self.app
+        try:
+            z = int(self.v_z.get().strip())
+        except ValueError:
+            messagebox.showerror(app.t("err_layer_title"),
+                                 app.t("err_layer_z"), parent=self.win)
+            return
+        for layer in self.section.layers:
+            if layer is self.exclude:
+                continue
+            if layer.z == z:
+                messagebox.showerror(app.t("err_layer_title"),
+                                     app.t("err_layer_dup", z=z),
+                                     parent=self.win)
+                return
+        parts = [p.strip() for p in self.v_coords.get().replace(";", ",")
+                 .split(",") if p.strip() != ""]
+        if len(parts) != 4:
+            messagebox.showerror(app.t("err_layer_title"),
+                                 app.t("err_layer_coords"), parent=self.win)
+            return
+        try:
+            coords = [int(p) for p in parts]
+        except ValueError:
+            messagebox.showerror(app.t("err_layer_title"),
+                                 app.t("err_layer_coords"), parent=self.win)
+            return
+
+        extra = self.v_extra.get().split(",")
+        while len(extra) < DAT_COORD_OFFSET - 2:
+            extra.append("0")
+        extra = extra[:DAT_COORD_OFFSET - 2]
+
+        self.result = {
+            "z": z,
+            "build_id": self.v_build.get().strip(),
+            "image": self.v_image.get().strip(),
+            "extra": extra,
+            "coords": coords,
+            "layerinfo": bool(self.v_layerinfo.get()),
+        }
+        self.win.destroy()
+
+
+class ConfirmDeleteDialog:
+    """Подтверждение удаления слоя (+ опция удаления записи LAYERINFO)."""
+
+    def __init__(self, app, message, option_text=None):
+        self.ok = False
+        self.option = False
+
+        win = tk.Toplevel(app.root)
+        win.title(app.t("del_title"))
+        win.configure(bg=COLOR_BG_APP)
+        win.resizable(False, False)
+        win.transient(app.root)
+        win.grab_set()
+
+        pad = ttk.Frame(win, padding=14)
+        pad.pack(fill="both", expand=True)
+        ttk.Label(pad, text=message, justify="left").pack(anchor="w")
+
+        var = tk.BooleanVar(value=bool(option_text))
+        if option_text:
+            ttk.Checkbutton(pad, text=option_text, variable=var).pack(
+                anchor="w", pady=(10, 0))
+
+        def _ok():
+            self.ok = True
+            self.option = bool(var.get()) if option_text else False
+            win.destroy()
+
+        btns = ttk.Frame(pad)
+        btns.pack(anchor="e", pady=(14, 0))
+        ttk.Button(btns, text=app.t("btn_ok"), command=_ok,
+                   style="Revert.TButton").pack(side="left", padx=(0, 6))
+        ttk.Button(btns, text=app.t("btn_cancel"),
+                   command=win.destroy).pack(side="left")
+
+        win.bind("<Return>", lambda _e: _ok())
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        win.geometry(f"+{app.root.winfo_rootx() + 160}"
+                     f"+{app.root.winfo_rooty() + 160}")
+        app.root.wait_window(win)
 
 
 def main():
