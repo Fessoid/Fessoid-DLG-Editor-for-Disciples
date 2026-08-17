@@ -1,4 +1,4 @@
-# Interface DLG Editor for Disciples by Fessoid v1.1 [RU/ENG/PL/CN]
+# Interface DLG Editor for Disciples by Fessoid v1.2 [RU/ENG/PL/CN]
 **Редактор интерфейса для Disciples 1 and 2 by Fessoid**  
 **Interface editor for Disciples 1 and 2**
   
