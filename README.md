@@ -58,16 +58,12 @@ VIDEO
   4. Перейдите в папку со скриптом:
      cd C:\путь\к\папке\со\скриптом
 
-  5. Запустите сборку в PowerShell. Версия подставится в имя файла сама:
-     $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
-           -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
-     pyinstaller --onefile --windowed `
-         --name "Fessoid DLG Editor for Disciples v$v" `
-         fessoid_dlg_editor_for_disciples.py
+  5. Запустите сборку:
+     pyinstaller --onefile --windowed --name "Fessoid DLG Editor for Disciples" fessoid_dlg_editor_for_disciples.py
 
 
-  6. Готовый exe с номером версии в имени появится в папке dist\.
-     Папку build\ и файл .spec можно удалить.
+  6. Готовый Fessoid DLG Editor for Disciples.exe будет в папке dist\.
+     Папку build\ и файл Fessoid DLG Editor for Disciples.spec можно удалить.
 <br>
 <br>  
 </details>  
@@ -111,15 +107,11 @@ VIDEO
   4. Navigate to the script folder:
      cd C:\path\to\script\folder
 
-  5. Build it in PowerShell. The version is put into the file name automatically:
-     $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
-           -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
-     pyinstaller --onefile --windowed `
-         --name "Fessoid DLG Editor for Disciples v$v" `
-         fessoid_dlg_editor_for_disciples.py
+  5. Build the executable:
+     pyinstaller --onefile --windowed --name "Fessoid DLG Editor for Disciples" fessoid_dlg_editor_for_disciples.py
 
-  6. The resulting exe, with the version in its name, appears in the dist\ folder.
-     The build\ folder and the .spec file can be deleted.
+  6. The resulting Fessoid DLG Editor for Disciples.exe will be in the dist\ folder.
+     The build\ folder and the Fessoid DLG Editor for Disciples.spec file can be deleted.
 <br>
 <br>  
 </details>    
@@ -165,16 +157,12 @@ VIDEO
   4. Przejdź do folderu ze skryptem:
      cd C:\ścieżka\do\folderu\ze\skryptem
 
-  5. Uruchom kompilację w PowerShell. Wersja trafi do nazwy pliku automatycznie:
-     $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
-           -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
-     pyinstaller --onefile --windowed `
-         --name "Fessoid DLG Editor for Disciples v$v" `
-         fessoid_dlg_editor_for_disciples.py
+  5. Uruchom kompilację:
+     pyinstaller --onefile --windowed --name "Fessoid DLG Editor for Disciples" fessoid_dlg_editor_for_disciples.py
 
 
-  6. Gotowy plik exe z numerem wersji w nazwie znajdziesz w folderze dist\.
-     Folder build\ oraz plik .spec można usunąć.
+  6. Gotowy plik Fessoid DLG Editor for Disciples.exe znajdziesz w folderze dist\.
+     Folder build\ oraz plik Fessoid DLG Editor for Disciples.spec można usunąć.
 <br>
 <br> 
 
@@ -220,16 +208,12 @@ VIDEO
   4. 切换到脚本所在文件夹：
      cd C:\脚本文件夹路径
 
-  5. 在 PowerShell 中运行编译命令，版本号会自动写入文件名：
-     $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
-           -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
-     pyinstaller --onefile --windowed `
-         --name "Fessoid DLG Editor for Disciples v$v" `
-         fessoid_dlg_editor_for_disciples.py
+  5. 运行编译命令：
+     pyinstaller --onefile --windowed --name "Fessoid DLG Editor for Disciples" fessoid_dlg_editor_for_disciples.py
 
 
-  6. 生成的 exe（文件名中带版本号）将位于 dist\ 文件夹中。
-     build\ 文件夹和 .spec 文件可以删除。
+  6. 生成的 Fessoid DLG Editor for Disciples.exe 将位于 dist\ 文件夹中。
+     build\ 文件夹和 Fessoid DLG Editor for Disciples.spec 文件可以删除。
 </details> 
 <br>
     

@@ -4,12 +4,8 @@ Fessoid DLG Editor for Disciples — визуальный редактор .dlg 
 Запуск:
     python fessoid_dlg_editor_for_disciples.py [путь_к_файлу.dlg|.dat]
 
-Сборка (версия в имени exe подставляется из APP_VERSION, PowerShell):
-    $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
-          -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
-    pyinstaller --onefile --windowed `
-        --name "Fessoid DLG Editor for Disciples v$v" `
-        fessoid_dlg_editor_for_disciples.py
+Сборка:
+    pyinstaller --onefile --windowed --name "Fessoid DLG Editor for Disciples" fessoid_dlg_editor_for_disciples.py
 """
 
 import configparser
