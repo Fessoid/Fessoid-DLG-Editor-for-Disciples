@@ -242,4 +242,5 @@ VIDEO
 <br>
 
 **О программе**  <br>
-<img width="413" height="494" alt="image" src="https://github.com/user-attachments/assets/9efd5e11-d1ec-4dc2-b69c-7a5e9ad20844" />
+<img width="413" height="495" alt="image" src="https://github.com/user-attachments/assets/7180c7bd-48e8-4561-97dd-72e159f711da" />
+
