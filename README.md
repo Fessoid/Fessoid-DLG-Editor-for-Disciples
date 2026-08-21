@@ -1,11 +1,9 @@
-# Interface DLG Editor for Disciples by Fessoid v1.2 [RU/ENG/PL/CN]
+# Interface DLG Editor for Disciples by Fessoid [![Скачать](https://img.shields.io/github/v/release/Fessoid/DLG-Editor-for-Disciples?color=orange)](https://github.com/Fessoid/DLG-Editor-for-Disciples/releases)  [RU/ENG/PL/CN]
 **Редактор интерфейса для Disciples 1 and 2 by Fessoid**  
 **Interface editor for Disciples 1 and 2**
   
-  
-[![Скачать](https://img.shields.io/github/v/release/Fessoid/DLG-Editor-for-Disciples?color=orange)](https://github.com/Fessoid/DLG-Editor-for-Disciples/releases)  
 [Патчноут/Changelog/Dziennik zmian/更新日志](https://github.com/Fessoid/DLG-Editor-for-Disciples/blob/main/CHANGELOG.md)
-
+<br>  
 Разработал программу для самостоятельного изменения интерфейса игр Disciples (1 и 2 части).  
 
 Редактирует dlg-файлы интерфейса как для Оригинальной игры, так и любых модов (папка Interf).  
@@ -219,21 +217,29 @@ VIDEO
 </details> 
 <br>
     
-**ScenEdit.dlg**  
-<img width="1365" height="730" alt="image" src="https://github.com/user-attachments/assets/1bd996cf-e3ea-432c-be1e-e389a2b9a4fe" />
-
-  
-**ScenEdit.dlg**  
-<img width="1365" height="730" alt="image" src="https://github.com/user-attachments/assets/811848ae-734c-4ff9-acf7-c5d40acfb7e4" />
-
-  
-**CustomLobby.dlg**  
-<img width="1365" height="730" alt="image" src="https://github.com/user-attachments/assets/06a54d5b-6666-4280-8c92-e84be2470881" />
-
-  
 **Interf.dlg**  
-<img width="1365" height="728" alt="image" src="https://github.com/user-attachments/assets/1b94a6f6-0458-412e-9da6-01e23dae91f1" />
+<img width="1365" height="729" alt="image" src="https://github.com/user-attachments/assets/a1f7359b-9fb3-4280-b3d0-8558d104e5a5" />
 
+
+**ScenEdit.dlg**  
+<img width="1365" height="729" alt="image" src="https://github.com/user-attachments/assets/47e13553-c541-481d-a19f-a22110969b39" />
+
+
+
+**CustomLobby.dlg**  
+<img width="1365" height="729" alt="image" src="https://github.com/user-attachments/assets/73408844-ebc9-46a6-9f55-a10b9db6bcc0" />
+
+
+
+**Interf.dlg** 
+<img width="1365" height="728" alt="image" src="https://github.com/user-attachments/assets/1b30b8f6-72c5-4d02-b535-2536e79ded05" />
   
-**О программе**  
-<img width="395" height="497" alt="image" src="https://github.com/user-attachments/assets/b08ea5c3-0be1-42d5-b31f-e457559734cc" />
+
+
+**Capital.dat**
+<img width="1365" height="729" alt="image" src="https://github.com/user-attachments/assets/609c309f-e35a-43e9-b9ab-16cc83056cfd" />
+
+<br>
+
+**О программе**  <br>
+<img width="413" height="494" alt="image" src="https://github.com/user-attachments/assets/9efd5e11-d1ec-4dc2-b69c-7a5e9ad20844" />
