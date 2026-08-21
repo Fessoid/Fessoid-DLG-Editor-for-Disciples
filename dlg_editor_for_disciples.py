@@ -9,23 +9,37 @@ DLG Editor for Disciples by Fessoid — визуальный редактор .d
 """
 
 import configparser
+import json
 import os
 import re
 import subprocess
 import sys
+import threading
+import urllib.error
+import urllib.request
 import webbrowser
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 # Название и версия программы — единственное место, где они задаются.
 APP_T = "DLG Editor for Disciples by Fessoid v"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 APP_TITLE = APP_T + APP_VERSION
 
-# Путь к файлу настроек — лежит рядом с exe / скриптом.
-SETTINGS_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(sys.argv[0])), "DLG_Editor_settings.ini"
-)
+# Папка программы — рядом с exe / скриптом. Туда же кладётся файл настроек
+# и скачивается новая версия при обновлении.
+APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+SETTINGS_PATH = os.path.join(APP_DIR, "DLG_Editor_settings.ini")
+
+# --- Проверка обновлений -----------------------------------------------------
+# Репозиторий публичный, поэтому запрос к API GitHub идёт без авторизации:
+# токен не нужен. Лимит анонимных запросов — 60 в час на IP-адрес, а проверка
+# выполняется один раз за запуск, так что упереться в него нельзя.
+UPDATE_REPO = "Fessoid/Fessoid-DLG-Editor-for-Disciples"
+UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+UPDATE_PAGE_URL = f"https://github.com/{UPDATE_REPO}/releases/latest"
+UPDATE_TIMEOUT = 4      # секунд на сетевой запрос
+UPDATE_DELAY_MS = 1200  # пауза после старта, чтобы окно успело отрисоваться
 
 # Режимы работы редактора.
 MODE_DLG = "dlg"
@@ -55,15 +69,18 @@ def key_letter(event):
 # Ключ — внутренний идентификатор, значение — текст для пользователя.
 # =============================================================================
 
-# Контакты для окна «О программе». Формат: (название, URL).
-# Для email используйте mailto: — программа автоматически откроет почтовый клиент.
+# Контакты для окна «О программе». Формат: (название, URL, жирный шрифт).
+# Название, начинающееся с «@», — ключ перевода: текст берётся из STRINGS для
+# текущего языка. Для email используйте mailto: — программа автоматически
+# откроет почтовый клиент. Адрес репозитория собирается из UPDATE_REPO, чтобы
+# ссылка в окне и адрес проверки обновлений не разъехались.
 ABOUT_LINKS = [
-    ("Boosty",  "https://boosty.to/fessoid"),
-    ("YouTube", "https://www.youtube.com/@Fessoid"),
-    ("Steam",   "https://steamcommunity.com/id/fessoid/"),
-    ("",        ""),                                         # пустая строка
-    ("Github",  "https://github.com/Fessoid/DLG-Editor-for-Disciples/"),
-    ("Email",   "mailto:fessoid@gmail.com"),
+    ("@about_support", "https://boosty.to/fessoid",              True),
+    ("YouTube",        "https://www.youtube.com/@Fessoid",       False),
+    ("Steam",          "https://steamcommunity.com/id/fessoid/", False),
+    ("",               "",                                       False),
+    ("Github",         f"https://github.com/{UPDATE_REPO}",      False),
+    ("Email",          "mailto:fessoid@gmail.com",               False),
 ]
 
 STRINGS = {
@@ -75,8 +92,8 @@ STRINGS = {
         "menu_save_as":          "Сохранить как...",
         "menu_exit":             "Выход",
         "menu_edit":             "Правка",
-        "menu_undo":             "Отменить действие",
-        "menu_redo":             "Вернуть действие",
+        "menu_undo":             "Отменить изменение",
+        "menu_redo":             "Вернуть изменение",
         "menu_history":          "История изменений...",
         "menu_settings":         "Настройки",
         "menu_dat_secondary":    "Изменять вторичные координаты в .dat",
@@ -93,8 +110,8 @@ STRINGS = {
 
         # --- Статус ---
         "status_open_hint":      "Откройте .dlg или Capital.dat (Ctrl+O)",
-        "status_loaded":         "Загружено: {fname} — секций: {count}",
-        "status_loaded_dat":     "Загружено: {fname} — рас: {count}, слоёв: {layers}",
+        "status_loaded":         "Загружено: {path} — секций: {count}",
+        "status_loaded_dat":     "Загружено: {path} — рас: {count}, слоёв: {layers}",
         "status_saved":          "Сохранено: {path}",
 
         # --- Правая панель ---
@@ -137,6 +154,11 @@ STRINGS = {
         "btn_history":           "История",
         "btn_open_external":     "Открыть файл в блокноте",
         "btn_open_external_tip": "Открыть текущий файл текстовым редактором",
+        "btn_reload":            "Перечитать файл",
+        "btn_reload_tip":        "Прочитать файл с диска заново — подхватить\n"
+                                 "правки, сделанные в другой программе.\n"
+                                 "Несохранённые изменения пропадут.",
+        "btn_open_folder":       "Открыть папку файла",
         "btn_add":               "Добавить",
         "btn_edit":              "Изменить",
         "btn_delete":            "Удалить",
@@ -144,6 +166,25 @@ STRINGS = {
         "btn_cancel":            "Отмена",
         "btn_close":             "Закрыть",
         "btn_copy":              "Копировать",
+
+        # --- Подсказки к кнопкам (всплывают при наведении) ---
+        "btn_save_tip":          "Записать изменения в текущий файл (Ctrl+S)",
+        "btn_revert_tip":        "Отменить все несохранённые изменения\n"
+                                 "и вернуть файл к состоянию на диске",
+        "btn_history_tip":       "Открыть список всех правок и вернуться\n"
+                                 "к любой из них (Ctrl+H)",
+        "btn_open_folder_tip":   "Открыть папку с текущим файлом\n"
+                                 "и выделить его в ней",
+        "btn_add_tip":           "Добавить новый слой здания в выбранную расу",
+        "btn_edit_tip":          "Изменить параметры выделенного слоя",
+        "btn_delete_tip":        "Удалить выделенный слой.\n"
+                                 "Действие можно отменить через Ctrl+Z.",
+        "hist_revert_to_tip":    "Вернуть файл к выделенной строке истории",
+        "btn_close_tip":         "Закрыть окно",
+        "btn_ok_tip":            "Применить изменения и закрыть окно",
+        "btn_cancel_tip":        "Закрыть окно, ничего не меняя",
+        "btn_delete_ok_tip":     "Удалить слой.\n"
+                                 "Действие можно отменить через Ctrl+Z.",
 
         # --- Диалоги ---
         "err_read_title":        "Ошибка чтения",
@@ -187,8 +228,23 @@ STRINGS = {
         "del_layerinfo":         "Также удалить запись LAYERINFO для {build}",
         "no_selection":          "Слой не выбран.",
 
+        # --- Обновление ---
+        "update_title":          "Доступно обновление",
+        "update_msg":            "Вышла новая версия {new}.\n"
+                                 "Установлена версия {cur}.\n\n"
+                                 "Скачать новую версию сейчас?",
+        "update_downloading":    "Загрузка обновления...",
+        "update_done_title":     "Обновление скачано",
+        "update_done_msg":       "Новая версия сохранена рядом с программой:\n"
+                                 "{path}\n\n"
+                                 "Запустить её и закрыть текущую?",
+        "update_fail_title":     "Не удалось скачать",
+        "update_fail_msg":       "Скачать обновление не получилось.\n{err}\n\n"
+                                 "Открыть страницу релиза в браузере?",
+
         # --- О программе ---
         "about_title":           "О программе",
+        "about_support":         "Поддержать разработку",
         "about_name":            APP_TITLE,
         "about_version":         "версия " + APP_VERSION,
         "about_text": (
@@ -211,8 +267,8 @@ STRINGS = {
         "menu_save_as":          "Save As...",
         "menu_exit":             "Exit",
         "menu_edit":             "Edit",
-        "menu_undo":             "Undo",
-        "menu_redo":             "Redo",
+        "menu_undo":             "Undo change",
+        "menu_redo":             "Redo change",
         "menu_history":          "Change History...",
         "menu_settings":         "Settings",
         "menu_dat_secondary":    "Update secondary coordinates in .dat",
@@ -229,8 +285,8 @@ STRINGS = {
 
         # --- Status ---
         "status_open_hint":      "Open a .dlg file or Capital.dat (Ctrl+O)",
-        "status_loaded":         "Loaded: {fname} — sections: {count}",
-        "status_loaded_dat":     "Loaded: {fname} — races: {count}, layers: {layers}",
+        "status_loaded":         "Loaded: {path} — sections: {count}",
+        "status_loaded_dat":     "Loaded: {path} — races: {count}, layers: {layers}",
         "status_saved":          "Saved: {path}",
 
         # --- Right panel ---
@@ -273,6 +329,11 @@ STRINGS = {
         "btn_history":           "History",
         "btn_open_external":     "Open file in Notepad",
         "btn_open_external_tip": "Open the current file in a text editor",
+        "btn_reload":            "Reload file",
+        "btn_reload_tip":        "Read the file from disk again to pick up\n"
+                                 "edits made in another program.\n"
+                                 "Unsaved changes will be lost.",
+        "btn_open_folder":       "Open file folder",
         "btn_add":               "Add",
         "btn_edit":              "Edit",
         "btn_delete":            "Delete",
@@ -280,6 +341,25 @@ STRINGS = {
         "btn_cancel":            "Cancel",
         "btn_close":             "Close",
         "btn_copy":              "Copy",
+
+        # --- Button tooltips (shown on hover) ---
+        "btn_save_tip":          "Write the changes to the current file (Ctrl+S)",
+        "btn_revert_tip":        "Discard all unsaved changes and restore\n"
+                                 "the file to its state on disk",
+        "btn_history_tip":       "Open the list of all edits and jump back\n"
+                                 "to any of them (Ctrl+H)",
+        "btn_open_folder_tip":   "Open the folder of the current file\n"
+                                 "and select the file in it",
+        "btn_add_tip":           "Add a new building layer to the selected race",
+        "btn_edit_tip":          "Change the parameters of the selected layer",
+        "btn_delete_tip":        "Delete the selected layer.\n"
+                                 "The action can be undone with Ctrl+Z.",
+        "hist_revert_to_tip":    "Restore the file to the selected history row",
+        "btn_close_tip":         "Close the window",
+        "btn_ok_tip":            "Apply the changes and close the window",
+        "btn_cancel_tip":        "Close the window without changing anything",
+        "btn_delete_ok_tip":     "Delete the layer.\n"
+                                 "The action can be undone with Ctrl+Z.",
 
         # --- Dialogs ---
         "err_read_title":        "Read Error",
@@ -323,8 +403,23 @@ STRINGS = {
         "del_layerinfo":         "Also delete the LAYERINFO entry for {build}",
         "no_selection":          "No layer selected.",
 
+        # --- Update ---
+        "update_title":          "Update available",
+        "update_msg":            "Version {new} has been released.\n"
+                                 "You have version {cur}.\n\n"
+                                 "Download the new version now?",
+        "update_downloading":    "Downloading update...",
+        "update_done_title":     "Update downloaded",
+        "update_done_msg":       "The new version was saved next to the program:\n"
+                                 "{path}\n\n"
+                                 "Launch it and close the current one?",
+        "update_fail_title":     "Download failed",
+        "update_fail_msg":       "The update could not be downloaded.\n{err}\n\n"
+                                 "Open the release page in the browser?",
+
         # --- About ---
         "about_title":           "About",
+        "about_support":         "Support the development",
         "about_name":            APP_TITLE,
         "about_version":         "version " + APP_VERSION,
         "about_text": (
@@ -346,8 +441,8 @@ STRINGS = {
         "menu_save_as":          "Zapisz jako...",
         "menu_exit":             "Wyjście",
         "menu_edit":             "Edycja",
-        "menu_undo":             "Cofnij działanie",
-        "menu_redo":             "Ponów działanie",
+        "menu_undo":             "Cofnij zmianę",
+        "menu_redo":             "Ponów zmianę",
         "menu_history":          "Historia zmian...",
         "menu_settings":         "Ustawienia",
         "menu_dat_secondary":    "Zmieniaj wtórne współrzędne w .dat",
@@ -364,8 +459,8 @@ STRINGS = {
 
         # --- Status ---
         "status_open_hint":      "Otwórz plik .dlg lub Capital.dat (Ctrl+O)",
-        "status_loaded":         "Wczytano: {fname} — sekcji: {count}",
-        "status_loaded_dat":     "Wczytano: {fname} — ras: {count}, warstw: {layers}",
+        "status_loaded":         "Wczytano: {path} — sekcji: {count}",
+        "status_loaded_dat":     "Wczytano: {path} — ras: {count}, warstw: {layers}",
         "status_saved":          "Zapisano: {path}",
 
         # --- Right panel ---
@@ -408,6 +503,11 @@ STRINGS = {
         "btn_history":           "Historia",
         "btn_open_external":     "Otwórz plik w Notatniku",
         "btn_open_external_tip": "Otwórz bieżący plik w edytorze tekstu",
+        "btn_reload":            "Wczytaj ponownie",
+        "btn_reload_tip":        "Wczytaj plik z dysku ponownie, aby podchwycić\n"
+                                 "zmiany z innego programu.\n"
+                                 "Niezapisane zmiany przepadną.",
+        "btn_open_folder":       "Otwórz folder pliku",
         "btn_add":               "Dodaj",
         "btn_edit":              "Zmień",
         "btn_delete":            "Usuń",
@@ -415,6 +515,25 @@ STRINGS = {
         "btn_cancel":            "Anuluj",
         "btn_close":             "Zamknij",
         "btn_copy":              "Kopiuj",
+
+        # --- Podpowiedzi przycisków (po najechaniu myszą) ---
+        "btn_save_tip":          "Zapisz zmiany w bieżącym pliku (Ctrl+S)",
+        "btn_revert_tip":        "Odrzuć wszystkie niezapisane zmiany\n"
+                                 "i przywróć plik do stanu z dysku",
+        "btn_history_tip":       "Otwórz listę wszystkich zmian i wróć\n"
+                                 "do dowolnej z nich (Ctrl+H)",
+        "btn_open_folder_tip":   "Otwórz folder bieżącego pliku\n"
+                                 "i zaznacz w nim ten plik",
+        "btn_add_tip":           "Dodaj nową warstwę budynku do wybranej rasy",
+        "btn_edit_tip":          "Zmień parametry zaznaczonej warstwy",
+        "btn_delete_tip":        "Usuń zaznaczoną warstwę.\n"
+                                 "Operację można cofnąć przez Ctrl+Z.",
+        "hist_revert_to_tip":    "Przywróć plik do zaznaczonego wiersza historii",
+        "btn_close_tip":         "Zamknij okno",
+        "btn_ok_tip":            "Zastosuj zmiany i zamknij okno",
+        "btn_cancel_tip":        "Zamknij okno bez żadnych zmian",
+        "btn_delete_ok_tip":     "Usuń warstwę.\n"
+                                 "Operację można cofnąć przez Ctrl+Z.",
 
         # --- Dialogs ---
         "err_read_title":        "Błąd odczytu",
@@ -458,8 +577,23 @@ STRINGS = {
         "del_layerinfo":         "Usuń także wpis LAYERINFO dla {build}",
         "no_selection":          "Nie wybrano warstwy.",
 
+        # --- Aktualizacja ---
+        "update_title":          "Dostępna aktualizacja",
+        "update_msg":            "Ukazała się nowa wersja {new}.\n"
+                                 "Zainstalowana jest wersja {cur}.\n\n"
+                                 "Pobrać nową wersję teraz?",
+        "update_downloading":    "Pobieranie aktualizacji...",
+        "update_done_title":     "Aktualizacja pobrana",
+        "update_done_msg":       "Nowa wersja została zapisana obok programu:\n"
+                                 "{path}\n\n"
+                                 "Uruchomić ją i zamknąć bieżącą?",
+        "update_fail_title":     "Nie udało się pobrać",
+        "update_fail_msg":       "Nie udało się pobrać aktualizacji.\n{err}\n\n"
+                                 "Otworzyć stronę wydania w przeglądarce?",
+
         # --- About ---
         "about_title":           "O programie",
+        "about_support":         "Wesprzyj rozwój",
         "about_name":            APP_TITLE,
         "about_version":         "wersja " + APP_VERSION,
         "about_text": (
@@ -481,8 +615,8 @@ STRINGS = {
         "menu_save_as":          "另存为...",
         "menu_exit":             "退出",
         "menu_edit":             "编辑",
-        "menu_undo":             "撤销操作",
-        "menu_redo":             "重做操作",
+        "menu_undo":             "撤销修改",
+        "menu_redo":             "恢复修改",
         "menu_history":          "修改历史...",
         "menu_settings":         "设置",
         "menu_dat_secondary":    "修改 .dat 中的次要坐标",
@@ -499,8 +633,8 @@ STRINGS = {
 
         # --- 状态 ---
         "status_open_hint":      "请打开 .dlg 或 Capital.dat（Ctrl+O）",
-        "status_loaded":         "已加载：{fname} — 区段数：{count}",
-        "status_loaded_dat":     "已加载：{fname} — 种族：{count}，图层：{layers}",
+        "status_loaded":         "已加载：{path} — 区段数：{count}",
+        "status_loaded_dat":     "已加载：{path} — 种族：{count}，图层：{layers}",
         "status_saved":          "已保存：{path}",
 
         # --- 右面板 ---
@@ -543,6 +677,11 @@ STRINGS = {
         "btn_history":           "历史",
         "btn_open_external":     "用记事本打开文件",
         "btn_open_external_tip": "用文本编辑器打开当前文件",
+        "btn_reload":            "重新读取文件",
+        "btn_reload_tip":        "重新从磁盘读取文件，以获取\n"
+                                 "在其他程序中所做的修改。\n"
+                                 "未保存的更改将会丢失。",
+        "btn_open_folder":       "打开文件所在文件夹",
         "btn_add":               "添加",
         "btn_edit":              "修改",
         "btn_delete":            "删除",
@@ -550,6 +689,25 @@ STRINGS = {
         "btn_cancel":            "取消",
         "btn_close":             "关闭",
         "btn_copy":              "复制",
+
+        # --- 按钮提示（鼠标悬停时显示）---
+        "btn_save_tip":          "将更改写入当前文件（Ctrl+S）",
+        "btn_revert_tip":        "放弃所有未保存的更改，\n"
+                                 "将文件恢复到磁盘上的状态",
+        "btn_history_tip":       "打开全部修改的列表，\n"
+                                 "可回退到其中任意一步（Ctrl+H）",
+        "btn_open_folder_tip":   "打开当前文件所在的文件夹\n"
+                                 "并在其中选中该文件",
+        "btn_add_tip":           "为选中的种族添加新的建筑图层",
+        "btn_edit_tip":          "修改选中图层的参数",
+        "btn_delete_tip":        "删除选中的图层。\n"
+                                 "该操作可通过 Ctrl+Z 撤销。",
+        "hist_revert_to_tip":    "将文件恢复到选中的历史记录行",
+        "btn_close_tip":         "关闭窗口",
+        "btn_ok_tip":            "应用更改并关闭窗口",
+        "btn_cancel_tip":        "关闭窗口且不做任何更改",
+        "btn_delete_ok_tip":     "删除该图层。\n"
+                                 "该操作可通过 Ctrl+Z 撤销。",
 
         # --- 对话框 ---
         "err_read_title":        "读取错误",
@@ -593,8 +751,23 @@ STRINGS = {
         "del_layerinfo":         "同时删除 {build} 的 LAYERINFO 记录",
         "no_selection":          "未选中图层。",
 
+        # --- 更新 ---
+        "update_title":          "有可用更新",
+        "update_msg":            "已发布新版本 {new}。\n"
+                                 "当前版本为 {cur}。\n\n"
+                                 "现在下载新版本吗？",
+        "update_downloading":    "正在下载更新……",
+        "update_done_title":     "更新已下载",
+        "update_done_msg":       "新版本已保存在程序所在的文件夹中：\n"
+                                 "{path}\n\n"
+                                 "要启动它并关闭当前程序吗？",
+        "update_fail_title":     "下载失败",
+        "update_fail_msg":       "无法下载更新。\n{err}\n\n"
+                                 "要在浏览器中打开发布页面吗？",
+
         # --- 关于 ---
         "about_title":           "关于",
+        "about_support":         "支持开发",
         "about_name":            APP_TITLE,
         "about_version":         "版本 " + APP_VERSION,
         "about_text": (
@@ -614,7 +787,7 @@ STRINGS = {
 # =============================================================================
 
 ELEMENT_TYPES = {
-    "BUTTONSD", "EDIT", "IMAGE", "LBOX", "RADIO", "SCROLL",
+    "BUTTON", "BUTTONSD", "EDIT", "IMAGE", "LBOX", "RADIO", "SCROLL",
     "SPIN", "TEXT", "TLBOX", "TOGGLE", "TOGGLESD",
 }
 
@@ -1024,6 +1197,89 @@ def write_dat_file(path, sections, line_ending, trailing_blanks=0):
 
 
 # =============================================================================
+# ПРОВЕРКА ОБНОВЛЕНИЙ
+#
+# Сеть трогаем только в фоновом потоке и только на чтение публичного API
+# GitHub. Любая ошибка — нет сети, нет релизов, изменился формат ответа —
+# гасится молча: проверка обновлений не должна мешать запуску редактора.
+# =============================================================================
+
+
+def parse_version(text):
+    """'v1.2' -> (1, 2). Нечисловой хвост отбрасывается, мусор даёт ()."""
+    if not text:
+        return ()
+    parts = []
+    for chunk in re.split(r"[._\-+]", str(text).strip().lstrip("vV")):
+        m = re.match(r"^(\d+)", chunk)
+        if not m:
+            break
+        parts.append(int(m.group(1)))
+    return tuple(parts)
+
+
+def is_newer(candidate, current):
+    """True, если версия candidate строго новее current."""
+    a = parse_version(candidate)
+    return bool(a) and a > parse_version(current)
+
+
+def _github_request(url):
+    return urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        # GitHub отклоняет запросы без User-Agent.
+        "User-Agent": f"DLG-Editor-for-Disciples/{APP_VERSION}",
+    })
+
+
+def fetch_latest_release():
+    """Последний релиз: (тег, страница, ссылка_на_exe|None, имя_exe|None)."""
+    req = _github_request(UPDATE_API_URL)
+    with urllib.request.urlopen(req, timeout=UPDATE_TIMEOUT) as resp:
+        data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    tag = (data.get("tag_name") or "").strip()
+    if not tag:
+        return None
+    page = data.get("html_url") or UPDATE_PAGE_URL
+    # Имена ассетов между релизами не согласованы (в v1.1 был .zip, в v1.2 —
+    # .exe), поэтому ищем первый .exe, а если его нет — отправим на страницу.
+    for asset in data.get("assets") or []:
+        name = (asset.get("name") or "").strip()
+        if name.lower().endswith(".exe") and asset.get("browser_download_url"):
+            return tag, page, asset["browser_download_url"], name
+    return tag, page, None, None
+
+
+def download_file(url, dest_path, timeout=120):
+    """Качает во временный .part и переименовывает: обрыв связи не оставит
+    рядом с программой недокачанный exe."""
+    tmp_path = dest_path + ".part"
+    req = _github_request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        os.replace(tmp_path, dest_path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    return dest_path
+
+
+def running_as_exe():
+    """True, если программа запущена собранным exe, а не как .py-скрипт."""
+    return bool(getattr(sys, "frozen", False))
+
+
+# =============================================================================
 # GUI
 # =============================================================================
 
@@ -1041,9 +1297,192 @@ HIT_DIALOG = "dialog"
 
 # Ширина боковых колонок — фиксирована, центр тянется на всё остальное.
 LEFT_WIDTH = 260
-RIGHT_WIDTH = 380
+RIGHT_WIDTH = 400   # с запасом на полосу прокрутки панели: без него
+                    # кнопки в заголовке «Подсказки» обрезаются
 # Высота видимой части блока подсказок (остальное — прокруткой).
 HINTS_HEIGHT = 120
+
+
+# =============================================================================
+# ФЛАГИ ЯЗЫКОВ В МЕНЮ
+#
+# Флаг — визуальная подсказка: человек, запустивший программу на чужом языке,
+# находит переключатель по картинке, не читая надписей. Поэтому флаги рисуются
+# кодом, а не берутся эмодзи: символы 🇷🇺 и подобные лежат за пределами BMP,
+# и Tk 8.6 на Windows выводит вместо них пустые прямоугольники. Внешних файлов
+# у программы тоже нет — она распространяется одним exe.
+# =============================================================================
+
+FLAG_W, FLAG_H = 16, 11
+
+# Приписка к пункту «Язык» в строке меню — см. _build_menu.
+LANG_CODES = " (RU/EN/PL/中文)"
+
+
+def _make_flag(code):
+    """Флаг 16×11 для кода языка. Возвращает tk.PhotoImage."""
+    img = tk.PhotoImage(width=FLAG_W, height=FLAG_H)
+
+    def band(color, y1, y2):
+        img.put(color, to=(0, y1, FLAG_W, y2))
+
+    def dot(color, x, y):
+        if 0 <= x < FLAG_W and 0 <= y < FLAG_H:
+            img.put(color, to=(x, y, x + 1, y + 1))
+
+    if code == "ru":
+        band("#ffffff", 0, 4)
+        band("#0039a6", 4, 8)
+        band("#d52b1e", 8, FLAG_H)
+    elif code == "pl":
+        band("#ffffff", 0, 6)
+        band("#dc143c", 6, FLAG_H)
+    elif code == "zh":
+        band("#de2910", 0, FLAG_H)
+        for x, y in ((3, 1), (2, 2), (3, 2), (4, 2), (2, 3), (4, 3), (3, 4)):
+            dot("#ffde00", x, y)          # большая звезда
+        for x, y in ((6, 1), (8, 2), (8, 4), (6, 5)):
+            dot("#ffde00", x, y)          # четыре малые
+    else:                                  # en — Union Jack, упрощённый
+        band("#012169", 0, FLAG_H)
+        for x in range(FLAG_W):           # белые диагонали
+            y = round(x * (FLAG_H - 1) / (FLAG_W - 1))
+            dot("#ffffff", x, y)
+            dot("#ffffff", x, FLAG_H - 1 - y)
+        img.put("#ffffff", to=(6, 0, 10, FLAG_H))     # белый крест
+        band("#ffffff", 4, 7)
+        img.put("#c8102e", to=(7, 0, 9, FLAG_H))      # красный крест
+        band("#c8102e", 5, 6)
+
+    for x in range(FLAG_W):               # рамка, иначе белый край сливается
+        dot("#808080", x, 0)
+        dot("#808080", x, FLAG_H - 1)
+    for y in range(FLAG_H):
+        dot("#808080", 0, y)
+        dot("#808080", FLAG_W - 1, y)
+    return img
+
+
+# =============================================================================
+# РАЗМЕЩЕНИЕ ОКОН В ВИДИМОЙ ОБЛАСТИ
+#
+# Правило: любой элемент интерфейса должен быть виден целиком при любом
+# сценарии — окно развёрнуто, окно у края экрана, панель задач снизу, сбоку
+# или скрыта, экран любого размера. Поэтому позицию всплывающих окон всегда
+# считаем от рабочей области, а не от координат виджета.
+# =============================================================================
+
+
+def work_area(widget):
+    """Видимая область экрана без панели задач: (ширина, высота).
+
+    wm_maxsize на Windows возвращает именно рабочую область — экран минус
+    панель задач, где бы она ни стояла. На других системах отдаёт размер
+    экрана, что тоже верный ответ. На winfo_screenheight полагаться нельзя:
+    он про панель задач не знает.
+    """
+    try:
+        w, h = widget.winfo_toplevel().wm_maxsize()
+    except tk.TclError:
+        w = h = 0
+    return (min(w or widget.winfo_screenwidth(), widget.winfo_screenwidth()),
+            min(h or widget.winfo_screenheight(), widget.winfo_screenheight()))
+
+
+def place_in_view(win, x, y, ref=None):
+    """Ставит окно в (x, y), сдвигая его так, чтобы оно влезло целиком.
+
+    ref — виджет, по которому меряется рабочая область. Указывать его нужно
+    всегда: wm_maxsize отдаёт рабочую область только для главного окна
+    программы, а у дочерних окон и окон без рамки — весь экран вместе с
+    панелью задач.
+
+    Рамка и заголовок окна в winfo_width/height не входят, но место на экране
+    занимают, а портативного способа спросить их размер у системы нет —
+    поэтому меряем по разнице между заданной и фактической позицией.
+    """
+    aw, ah = work_area(ref if ref is not None else win)
+    win.wm_geometry(f"+{x}+{y}")
+    win.update_idletasks()
+    border = max(0, win.winfo_rootx() - x)
+    title = max(0, win.winfo_rooty() - y)
+    full_w = win.winfo_width() + 2 * border
+    full_h = win.winfo_height() + title + border
+    x = max(0, min(x, aw - full_w))
+    y = max(0, min(y, ah - full_h))
+    win.wm_geometry(f"+{x}+{y}")
+
+
+def menu_font():
+    """Шрифт меню, в котором есть собственные иероглифы.
+
+    Стандартный TkMenuFont — Segoe UI, китайских глифов в нём нет. Windows
+    подставляет их при отрисовке, а ширину пункта Tk считает по исходному
+    шрифту: место выделяется под 48 пикселей, рисуется вдвое шире, и от
+    «简体中文» видно один иероглиф. Со шрифтом, где глифы свои, подстановки
+    не происходит и обрезать нечего.
+    """
+    base = tkfont.nametofont("TkMenuFont")
+    families = set(tkfont.families())
+    for name in ("Microsoft YaHei UI", "Microsoft YaHei",   # Windows
+                 "PingFang SC", "Heiti SC",                 # macOS
+                 "Noto Sans CJK SC", "WenQuanYi Micro Hei"):  # Linux
+        if name in families:
+            return tkfont.Font(family=name, size=base.actual("size"),
+                               weight=base.actual("weight"))
+    return base
+
+
+class Tooltip:
+    """Всплывающая подсказка у виджета.
+
+    Текст берётся функцией, а не строкой: язык программы меняется на лету,
+    и подсказка должна показывать текущий, а не тот, что был при создании.
+    """
+
+    def __init__(self, widget, text_func, delay=450):
+        self.widget = widget
+        self.text_func = text_func
+        self.delay = delay
+        self._after_id = None
+        self._win = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _cancel(self):
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        text = self.text_func()
+        if not text or self._win is not None:
+            return
+        self._win = tk.Toplevel(self.widget)
+        self._win.wm_overrideredirect(True)
+        tk.Label(self._win, text=text, justify="left", bg="#ffffe1",
+                 fg=COLOR_TEXT, relief="solid", borderwidth=1,
+                 font=("Segoe UI", 8), padx=6, pady=3).pack()
+        self._win.update_idletasks()
+        # Кнопки внизу панели: подсказка под ними уходит под панель задач,
+        # поэтому если снизу места нет — показываем её над кнопкой. Сдвиг по
+        # горизонтали и окончательную проверку делает place_in_view.
+        x = self.widget.winfo_rootx()
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        if y + self._win.winfo_height() > work_area(self.widget)[1]:
+            y = self.widget.winfo_rooty() - self._win.winfo_height() - 4
+        place_in_view(self._win, x, y, ref=self.widget)
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self._win is not None:
+            self._win.destroy()
+            self._win = None
 
 
 class HistoryEntry:
@@ -1100,15 +1539,31 @@ class DlgEditorApp:
         self.dialog_rect_id = None
         self._history_win = None
 
+        # Строка «Загружено»: ключ и подстановки последней загрузки. Хранятся,
+        # чтобы пересобрать её при смене языка и при изменении ширины окна.
+        self._status_loaded = None
+        self._status_text = ""        # текст, который выставили мы сами
+
+        # Версия, от обновления на которую пользователь отказался.
+        self.skipped_version = ""
+        self._update_busy = False
+
         # Загружаем настройки до построения UI, чтобы язык был сразу верным.
         (saved_lang, saved_file, saved_maximized, saved_section,
-         saved_dat_secondary) = self._load_settings()
+         saved_dat_secondary, saved_skipped) = self._load_settings()
         if saved_lang and saved_lang in STRINGS:
             self.lang = saved_lang
         self.dat_secondary = saved_dat_secondary
+        self.skipped_version = saved_skipped or ""
 
         self._apply_initial_geometry()
         self._setup_styles()
+        # Картинки флагов держим на себе: Tk удаляет PhotoImage, на который
+        # не осталось ссылок из Python, и пункты меню становятся пустыми.
+        self.flag_images = {c: _make_flag(c) for c in ("ru", "en", "pl", "zh")}
+        # Отметка текущего языка в меню; меню пересоздаётся, переменная — нет.
+        self.lang_var = tk.StringVar(value=self.lang)
+        self.menu_font = menu_font()
         self._build_ui()
         self._bind_shortcuts()
         self._apply_language()
@@ -1122,6 +1577,9 @@ class DlgEditorApp:
             self._open_file(open_path)
             if saved_section and not initial_path:
                 self._select_section_by_name(saved_section)
+
+        # Проверка обновлений — после того как окно отрисовано, в фоне.
+        self.root.after(UPDATE_DELAY_MS, self._start_update_check)
 
     def t(self, key, **kw):
         s = STRINGS.get(self.lang, STRINGS["en"]).get(key, key)
@@ -1146,7 +1604,7 @@ class DlgEditorApp:
 
     def _load_settings(self):
         """Читает ini: (lang, last_file, maximized, last_section,
-        dat_secondary)."""
+        dat_secondary, skipped_version)."""
         cfg = configparser.ConfigParser()
         try:
             cfg.read(SETTINGS_PATH, encoding="utf-8")
@@ -1155,10 +1613,12 @@ class DlgEditorApp:
             maximized = cfg.get("General", "maximized", fallback="0")
             last_section = cfg.get("General", "last_section", fallback=None)
             dat_secondary = cfg.get("General", "dat_secondary", fallback="1")
+            # Версия, от обновления на которую пользователь отказался.
+            skipped = cfg.get("Update", "skipped_version", fallback="")
             return (lang, last_file, maximized == "1", last_section,
-                    dat_secondary != "0")
+                    dat_secondary != "0", skipped)
         except Exception:
-            return None, None, False, None, True
+            return None, None, False, None, True, ""
 
     def _save_settings(self):
         cfg = configparser.ConfigParser()
@@ -1169,6 +1629,7 @@ class DlgEditorApp:
             "last_section": self.current_section.name if self.current_section else "",
             "dat_secondary": "1" if self.dat_secondary else "0",
         }
+        cfg["Update"] = {"skipped_version": self.skipped_version or ""}
         try:
             with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
                 cfg.write(f)
@@ -1218,6 +1679,12 @@ class DlgEditorApp:
                         background="#9CC4E4", foreground=COLOR_TEXT)
         style.map("History.TButton",
                   background=[("active", "#88B2D4"), ("pressed", "#74A0C4")])
+        # Маленькая кнопка в цвете «Отменить» — «Перечитать файл».
+        style.configure("SmallRevert.TButton",
+                        background="#FFDF40", foreground=COLOR_TEXT,
+                        padding=(4, 0), font=("Segoe UI", 8))
+        style.map("SmallRevert.TButton",
+                  background=[("active", "#E8CC38"), ("pressed", "#D4BA30")])
         # Маленькая кнопка в цвете «Истории» — «Открыть в блокноте».
         style.configure("SmallHistory.TButton",
                         background="#9CC4E4", foreground=COLOR_TEXT,
@@ -1302,7 +1769,7 @@ class DlgEditorApp:
         self.section_listbox.bind("<<ListboxSelect>>", self._on_section_select)
 
         # Копирование имени секции: Ctrl+C и контекстное меню.
-        self.section_menu = tk.Menu(self.root, tearoff=0)
+        self.section_menu = tk.Menu(self.root, tearoff=0, font=self.menu_font)
         # Ctrl+C обрабатывается общим обработчиком _on_control_key.
         self.section_listbox.bind("<Button-3>", self._on_section_right_click)
 
@@ -1313,8 +1780,14 @@ class DlgEditorApp:
         center.columnconfigure(0, weight=1)
 
         self.status_var = tk.StringVar(value="...")
-        ttk.Label(center, textvariable=self.status_var,
-                  foreground=COLOR_TEXT_MUTED).grid(row=0, column=0, sticky="w")
+        # width=1 + sticky="ew": ширину метке задаёт колонка, а не её текст,
+        # иначе длинный путь растянул бы окно за пределы экрана.
+        self.status_font = tkfont.nametofont("TkDefaultFont")
+        self.status_label = ttk.Label(
+            center, textvariable=self.status_var, font=self.status_font,
+            foreground=COLOR_TEXT_MUTED, width=1, anchor="w")
+        self.status_label.grid(row=0, column=0, sticky="ew")
+        self.status_label.bind("<Configure>", self._on_status_resize)
 
         canvas_frame = ttk.Frame(center)
         canvas_frame.grid(row=1, column=0, sticky="nsew", pady=(2, 0))
@@ -1344,14 +1817,51 @@ class DlgEditorApp:
         self.canvas.bind("<Configure>", lambda _e: self._update_scrollregion())
 
     def _build_right(self, main):
-        right = ttk.Frame(main, padding=4, width=RIGHT_WIDTH)
-        right.grid(row=0, column=2, sticky="nsew")
-        right.grid_propagate(False)
+        # Правая панель лежит на холсте с прокруткой: при небольшой высоте
+        # экрана список элементов, поля координат и нижние кнопки в панель
+        # целиком не помещаются, и без прокрутки кнопки становятся
+        # недоступны. Полоса появляется только когда содержимое не влезло.
+        outer = ttk.Frame(main, width=RIGHT_WIDTH)
+        outer.grid(row=0, column=2, sticky="nsew")
+        outer.grid_propagate(False)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        self.right_canvas = tk.Canvas(outer, bg=COLOR_BG_APP,
+                                      highlightthickness=0, bd=0)
+        self.right_canvas.grid(row=0, column=0, sticky="nsew")
+        self.right_scroll = ttk.Scrollbar(outer, orient="vertical",
+                                          command=self.right_canvas.yview)
+        self.right_canvas.configure(yscrollcommand=self._on_right_scroll)
+
+        right = ttk.Frame(self.right_canvas, padding=4)
+        self.right_inner = right
+        self._right_window = self.right_canvas.create_window(
+            (0, 0), window=right, anchor="nw")
         right.columnconfigure(0, weight=1)
         right.rowconfigure(1, weight=1)
 
-        self.lbl_elements = ttk.Label(right, text="...")
+        self.right_canvas.bind("<Configure>", self._on_right_resize)
+        right.bind("<Configure>", lambda _e: self._on_right_resize())
+        # Колесо мыши работает над всей панелью, а не только над холстом:
+        # события уходят виджету под курсором и сами наверх не всплывают.
+        outer.bind("<Enter>", lambda _e: self._bind_right_wheel(True))
+        outer.bind("<Leave>", lambda _e: self._bind_right_wheel(False))
+
+        # Заголовок списка элементов и кнопка «Перечитать файл» — одной
+        # строкой: кнопка идёт сразу за подписью, пустое место забирает
+        # третья колонка, поэтому обе прижаты влево.
+        elements_head = ttk.Frame(right)
+        elements_head.grid(row=0, column=0, sticky="ew")
+        elements_head.columnconfigure(2, weight=1)
+        self.lbl_elements = ttk.Label(elements_head, text="...")
         self.lbl_elements.grid(row=0, column=0, sticky="w")
+        self.btn_reload = ttk.Button(elements_head, text="...",
+                                     style="SmallRevert.TButton",
+                                     command=self.cmd_revert)
+        self.btn_reload.grid(row=0, column=1, sticky="w", padx=(3, 0))
+        Tooltip(self.btn_reload, lambda: self.t("btn_reload_tip"))
+
         list_frame = ttk.Frame(right)
         list_frame.grid(row=1, column=0, sticky="nsew", pady=(2, 4))
         list_frame.columnconfigure(0, weight=1)
@@ -1368,7 +1878,7 @@ class DlgEditorApp:
         self.element_tree.bind("<Double-1>", lambda _e: self.cmd_layer_edit())
 
         # Копирование имени элемента/слоя: Ctrl+C и контекстное меню.
-        self.element_menu = tk.Menu(self.root, tearoff=0)
+        self.element_menu = tk.Menu(self.root, tearoff=0, font=self.menu_font)
         # Ctrl+C обрабатывается общим обработчиком _on_control_key.
         self.element_tree.bind("<Button-3>", self._on_element_right_click)
 
@@ -1388,6 +1898,9 @@ class DlgEditorApp:
         self.btn_delete = ttk.Button(self.layer_btns, text="...",
                                      command=self.cmd_layer_delete)
         self.btn_delete.grid(row=0, column=2, sticky="ew", padx=(2, 0))
+        Tooltip(self.btn_add, lambda: self.t("btn_add_tip"))
+        Tooltip(self.btn_edit, lambda: self.t("btn_edit_tip"))
+        Tooltip(self.btn_delete, lambda: self.t("btn_delete_tip"))
         self.layer_btns.grid_remove()
 
         # Размер DIALOG (только .dlg).
@@ -1433,18 +1946,28 @@ class DlgEditorApp:
             self.coord_vars[label] = v
 
         # Подсказки. Заголовок рамки — отдельный виджет (labelwidget), в нём
-        # же живёт кнопка «Открыть в блокноте», чтобы она не закрывала текст.
-        # Ширина заголовка задана явно (grid_propagate выключен), чтобы кнопку
-        # можно было прижать к правому краю — подальше от слова «Подсказки».
-        self.hints_head = ttk.Frame(right, width=RIGHT_WIDTH - 26, height=24)
+        # же живут кнопки «Открыть в блокноте» и «Открыть папку файла», чтобы
+        # они не закрывали текст. Ширина заголовка задана явно (grid_propagate
+        # выключен), поэтому кнопки прижаты к правому краю — подальше от слова
+        # «Подсказки», а ширину каждая берёт по своей надписи: на две кнопки с
+        # фиксированной шириной места в строке уже не хватает.
+        self.hints_head = ttk.Frame(right, width=RIGHT_WIDTH - 16, height=24)
+        # Ширину пересчитывает _on_right_resize: появление полосы прокрутки
+        # сужает панель, и кнопки в заголовке иначе обрезаются.
         self.hints_head.grid_propagate(False)
         self.hints_head.columnconfigure(1, weight=1)
         self.lbl_hints_title = ttk.Label(self.hints_head, text="...")
         self.lbl_hints_title.grid(row=0, column=0, sticky="w")
-        self.btn_open_ext = ttk.Button(self.hints_head, text="...", width=28,
+        self.btn_open_dir = ttk.Button(self.hints_head, text="...",
+                                       style="SmallHistory.TButton",
+                                       command=self.cmd_open_folder)
+        self.btn_open_dir.grid(row=0, column=2, sticky="e")
+        self.btn_open_ext = ttk.Button(self.hints_head, text="...",
                                        style="SmallHistory.TButton",
                                        command=self.cmd_open_external)
-        self.btn_open_ext.grid(row=0, column=2, sticky="e")
+        self.btn_open_ext.grid(row=0, column=3, sticky="e", padx=(3, 0))
+        Tooltip(self.btn_open_dir, lambda: self.t("btn_open_folder_tip"))
+        Tooltip(self.btn_open_ext, lambda: self.t("btn_open_external_tip"))
 
         self.hints_box = ttk.LabelFrame(right, labelwidget=self.hints_head)
         self.hints_box.grid(row=5, column=0, sticky="nsew")
@@ -1490,6 +2013,61 @@ class DlgEditorApp:
                                       command=self.cmd_history,
                                       style="History.TButton")
         self.btn_history.grid(row=0, column=2, sticky="ew", padx=(2, 0))
+        Tooltip(self.btn_save, lambda: self.t("btn_save_tip"))
+        Tooltip(self.btn_revert, lambda: self.t("btn_revert_tip"))
+        Tooltip(self.btn_history, lambda: self.t("btn_history_tip"))
+
+    # --- Прокрутка правой панели -------------------------------------------
+
+    def _on_right_scroll(self, first, last):
+        """Полоса прокрутки видна, только когда содержимое не помещается."""
+        self.right_scroll.set(first, last)
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            self.right_scroll.grid_remove()
+        else:
+            self.right_scroll.grid(row=0, column=1, sticky="ns")
+
+    def _on_right_resize(self, event=None):
+        canvas = self.right_canvas
+        width = event.width if event is not None else canvas.winfo_width()
+        height = event.height if event is not None else canvas.winfo_height()
+        if width <= 1 or not hasattr(self, "hints_head"):
+            return
+        # Высота внутренней рамки — не меньше высоты холста, иначе при
+        # высоком окне список элементов не растянется на свободное место.
+        need = self.right_inner.winfo_reqheight()
+        size = (width, max(need, height))
+        # Перенастраиваем, только если что-то изменилось: смена размера
+        # снова вызывает <Configure>, и без этой проверки получится цикл.
+        if size == getattr(self, "_right_size", None):
+            return
+        self._right_size = size
+        canvas.itemconfigure(self._right_window, width=size[0], height=size[1])
+        canvas.configure(scrollregion=(0, 0, size[0], size[1]))
+        self.hints_head.configure(width=max(200, width - 16))
+
+    def _bind_right_wheel(self, on):
+        # Флаг нужен, чтобы обработчик не навесился дважды: <Enter> прилетает
+        # и при переходе курсора на вложенный виджет панели.
+        if on == getattr(self, "_right_wheel_bound", False):
+            return
+        self._right_wheel_bound = on
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            if on:
+                self.root.bind_all(seq, self._on_right_wheel, add="+")
+            else:
+                self.root.unbind_all(seq)
+
+    def _on_right_wheel(self, event):
+        # Над списком элементов и над подсказками крутится их собственная
+        # прокрутка — панель в этот момент стоять должна.
+        w = event.widget
+        while w is not None:
+            if w in (self.element_tree, self.hints_canvas):
+                return
+            w = getattr(w, "master", None)
+        up = event.delta > 0 if event.delta else event.num == 4
+        self.right_canvas.yview_scroll(-1 if up else 1, "units")
 
     def _configure_element_columns(self):
         """Колонки таблицы зависят от режима (.dlg или Capital.dat)."""
@@ -1517,9 +2095,9 @@ class DlgEditorApp:
 
     def _build_menu(self):
         # Меню пересоздаётся целиком: entryconfigure -label не работает на Windows Tk.
-        menubar = tk.Menu(self.root)
+        menubar = tk.Menu(self.root, font=self.menu_font)
 
-        filemenu = tk.Menu(menubar, tearoff=0)
+        filemenu = tk.Menu(menubar, tearoff=0, font=self.menu_font)
         filemenu.add_command(label=self.t("menu_open"), command=self.cmd_open,
                              accelerator="Ctrl+O")
         filemenu.add_command(label=self.t("menu_save"), command=self.cmd_save,
@@ -1530,7 +2108,7 @@ class DlgEditorApp:
         filemenu.add_command(label=self.t("menu_exit"), command=self.cmd_exit)
         menubar.add_cascade(label=self.t("menu_file"), menu=filemenu)
 
-        editmenu = tk.Menu(menubar, tearoff=0)
+        editmenu = tk.Menu(menubar, tearoff=0, font=self.menu_font)
         editmenu.add_command(label=self.t("menu_undo"), command=self.cmd_undo,
                              accelerator="Ctrl+Z")
         editmenu.add_command(label=self.t("menu_redo"), command=self.cmd_redo,
@@ -1541,19 +2119,28 @@ class DlgEditorApp:
                              accelerator="Ctrl+H")
         menubar.add_cascade(label=self.t("menu_edit"), menu=editmenu)
 
-        setmenu = tk.Menu(menubar, tearoff=0)
+        setmenu = tk.Menu(menubar, tearoff=0, font=self.menu_font)
         self.dat_secondary_var = tk.BooleanVar(value=self.dat_secondary)
         setmenu.add_checkbutton(label=self.t("menu_dat_secondary"),
                                 variable=self.dat_secondary_var,
                                 command=self._toggle_dat_secondary)
         menubar.add_cascade(label=self.t("menu_settings"), menu=setmenu)
 
-        langmenu = tk.Menu(menubar, tearoff=0)
+        langmenu = tk.Menu(menubar, tearoff=0, font=self.menu_font)
+        self.lang_var.set(self.lang)
         for code in ("ru", "en", "pl", "zh"):
-            langmenu.add_command(
+            # Радиокнопка, а не подпись с символом: индикатор рисует сама
+            # система — той же галочкой, что и в «Настройках».
+            langmenu.add_radiobutton(
                 label=self.t("menu_lang_" + code),
+                image=self.flag_images[code], compound="left",
+                variable=self.lang_var, value=code,
                 command=lambda c=code: self._set_language(c))
-        menubar.add_cascade(label=self.t("menu_language"), menu=langmenu)
+        # В самой строке меню Windows картинки не поддерживает — вместо флага
+        # Tk выводит текст «(Image)». Поэтому там перечислены коды языков:
+        # человек, не читающий слова «Язык», всё равно узнает свой.
+        menubar.add_cascade(label=self.t("menu_language") + LANG_CODES,
+                            menu=langmenu)
 
         menubar.add_command(label=self.t("menu_about"), command=self.cmd_about)
         self.root.config(menu=menubar)
@@ -1578,14 +2165,133 @@ class DlgEditorApp:
             text=self.t("hint_text_dat" if is_dat else "hint_text"))
         self.btn_save.config(text=self.t("btn_save"))
         self.btn_revert.config(text=self.t("btn_revert"))
+        self.btn_reload.config(text=self.t("btn_reload"))
         self.btn_history.config(text=self.t("btn_history"))
         self.btn_open_ext.config(text=self.t("btn_open_external"))
+        self.btn_open_dir.config(text=self.t("btn_open_folder"))
         self.btn_add.config(text=self.t("btn_add"))
         self.btn_edit.config(text=self.t("btn_edit"))
         self.btn_delete.config(text=self.t("btn_delete"))
-        if not self.file_path:
-            self.status_var.set(self.t("status_open_hint"))
+        self._refresh_status()
         self._update_dialog_size_entries()
+
+    # --- Строка состояния --------------------------------------------------
+
+    def _refresh_status(self):
+        """Строка «Загружено» с полным путём к открытому файлу."""
+        if not self.file_path or not self._status_loaded:
+            text = self.t("status_open_hint")
+        else:
+            key, kw = self._status_loaded
+            # Ширину остального текста строки меряем по шаблону без пути.
+            rest = self.t(key, path="", **kw)
+            fitted = self._fit_path(os.path.normpath(self.file_path),
+                                    self.status_label.winfo_width(), rest)
+            text = self.t(key, path=fitted, **kw)
+        self._status_text = text
+        self.status_var.set(text)
+
+    def _fit_path(self, path, avail_px, rest_text):
+        """Путь целиком; если в строку не влезает — с многоточием в середине,
+        чтобы диск и имя файла остались видны."""
+        f = self.status_font
+        if avail_px <= 1:          # до первой отрисовки подгонять нечего
+            return path
+        budget = avail_px - f.measure(rest_text) - 4
+        if budget <= 0 or f.measure(path) <= budget:
+            return path
+        # Диск оставляем всегда, дальше отрезаем целыми папками — от самого
+        # длинного варианта к короткому, чтобы имя папки не рвалось посередине.
+        head = path[:3] if path[1:3] in (":\\", ":/") else ""
+        mid = path[len(head):]
+        for i, ch in enumerate(mid):
+            if ch in "\\/" and f.measure(head + "…" + mid[i:]) <= budget:
+                return head + "…" + mid[i:]
+        return head + "…" + os.sep + os.path.basename(path)
+
+    def _on_status_resize(self, _event):
+        # Пересобираем только собственную строку: сообщение о сохранении или
+        # о загрузке обновления перетирать нельзя.
+        if self.status_var.get() == self._status_text:
+            self._refresh_status()
+
+    # --- Обновление --------------------------------------------------------
+
+    def _start_update_check(self):
+        threading.Thread(target=self._update_worker, daemon=True).start()
+
+    def _update_worker(self):
+        try:
+            info = fetch_latest_release()
+        except Exception:
+            return      # нет сети, лимит API, битый ответ — молча выходим
+        if info:
+            try:
+                # Обращаться к Tk можно только из главного потока.
+                self.root.after(0, lambda: self._on_update_info(*info))
+            except RuntimeError:
+                pass    # окно уже закрыли, пока шёл запрос
+
+    def _on_update_info(self, tag, page_url, exe_url, exe_name):
+        if not is_newer(tag, APP_VERSION):
+            return
+        # От этой версии уже отказались — спрашиваем только про более новые.
+        if self.skipped_version and not is_newer(tag, self.skipped_version):
+            return
+        if not messagebox.askyesno(
+                self.t("update_title"),
+                self.t("update_msg", new=tag.lstrip("vV"), cur=APP_VERSION)):
+            self.skipped_version = tag
+            self._save_settings()
+            return
+        # Скачивать имеет смысл только собранный exe: при запуске из .py
+        # заменять нечего, поэтому открываем страницу релиза.
+        if not exe_url or not running_as_exe():
+            webbrowser.open(page_url)
+            return
+        self._download_update(exe_url, os.path.basename(exe_name), page_url)
+
+    def _download_update(self, exe_url, exe_name, page_url):
+        if self._update_busy:
+            return
+        self._update_busy = True
+        self.status_var.set(self.t("update_downloading"))
+        dest = os.path.join(APP_DIR, exe_name)
+
+        def work():
+            try:
+                download_file(exe_url, dest)
+            except Exception as exc:
+                self.root.after(
+                    0, lambda e=exc: self._update_failed(e, page_url))
+            else:
+                self.root.after(0, lambda: self._update_downloaded(dest))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_failed(self, exc, page_url):
+        self._update_busy = False
+        self._refresh_status()
+        if messagebox.askyesno(self.t("update_fail_title"),
+                               self.t("update_fail_msg", err=exc)):
+            webbrowser.open(page_url)
+
+    def _update_downloaded(self, dest):
+        self._update_busy = False
+        self._refresh_status()
+        if not messagebox.askyesno(self.t("update_done_title"),
+                                   self.t("update_done_msg", path=dest)):
+            return
+        if not self._confirm_discard_changes():
+            return
+        try:
+            subprocess.Popen([dest], cwd=APP_DIR)
+        except Exception as exc:
+            messagebox.showerror(self.t("err_open_title"),
+                                 self.t("err_open_msg", err=exc))
+            return
+        self._save_settings()
+        self.root.destroy()
 
     # --- Shortcuts ---------------------------------------------------------
 
@@ -1676,14 +2382,13 @@ class DlgEditorApp:
         self._update_dialog_size_entries()
         self._update_scrollregion()
 
-        fname = os.path.basename(path)
         if mode == MODE_DAT:
             layers = sum(len(s.layers) for s in sections)
-            self.status_var.set(self.t("status_loaded_dat", fname=fname,
-                                       count=len(sections), layers=layers))
+            self._status_loaded = ("status_loaded_dat",
+                                   {"count": len(sections), "layers": layers})
         else:
-            self.status_var.set(self.t("status_loaded", fname=fname,
-                                       count=len(sections)))
+            self._status_loaded = ("status_loaded", {"count": len(sections)})
+        self._refresh_status()
         self._save_settings()
 
     def _apply_mode_ui(self):
@@ -1766,6 +2471,26 @@ class DlgEditorApp:
             messagebox.showerror(self.t("err_open_title"),
                                  self.t("err_open_msg", err=exc))
 
+    def cmd_open_folder(self):
+        """Открывает папку с текущим файлом и выделяет в ней сам файл."""
+        if not self.file_path or not os.path.isfile(self.file_path):
+            return
+        path = os.path.normpath(self.file_path)
+        try:
+            if sys.platform.startswith("win"):
+                # Explorer понимает только форму /select,"путь" — кавычки
+                # строго вокруг пути, иначе он открывает «Документы». Поэтому
+                # команда собирается строкой, а не списком аргументов. Код
+                # возврата у него 1 даже при успехе, так что Popen, не call.
+                subprocess.Popen(f'explorer /select,"{path}"')
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            else:
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+        except Exception as exc:
+            messagebox.showerror(self.t("err_open_title"),
+                                 self.t("err_open_msg", err=exc))
+
     def cmd_exit(self):
         if not self._confirm_discard_changes():
             return
@@ -1792,22 +2517,29 @@ class DlgEditorApp:
                   justify="left").pack(anchor="w", pady=(0, 10))
 
         # Ссылки из ABOUT_LINKS.
-        for link_name, link_url in ABOUT_LINKS:
+        for link_name, link_url, bold in ABOUT_LINKS:
             if not link_name and not link_url:
                 ttk.Label(pad, text="").pack(anchor="w")
                 continue
-            display = (f"{link_name}: {link_url[7:]}"
+            name = (self.t(link_name[1:]) if link_name.startswith("@")
+                    else link_name)
+            display = (f"{name}: {link_url[7:]}"
                        if link_url.startswith("mailto:")
-                       else f"{link_name}: {link_url}")
+                       else f"{name}: {link_url}")
+            font = (("Segoe UI", 9, "underline", "bold") if bold
+                    else ("Segoe UI", 9, "underline"))
             lbl = ttk.Label(pad, text=display, foreground=COLOR_SELECTION,
-                            cursor="hand2",
-                            font=("Segoe UI", 9, "underline"))
+                            cursor="hand2", font=font)
             lbl.pack(anchor="w", pady=(0, 2))
             lbl.bind("<Button-1>",
                      lambda _e, url=link_url: webbrowser.open(url))
 
-        ttk.Button(pad, text=self.t("btn_ok"),
-                   command=win.destroy).pack(pady=(14, 0))
+        btn_about_ok = ttk.Button(pad, text=self.t("btn_ok"),
+                                  command=win.destroy)
+        btn_about_ok.pack(pady=(14, 0))
+        Tooltip(btn_about_ok, lambda: self.t("btn_close_tip"))
+        place_in_view(win, self.root.winfo_rootx() + 80,
+                      self.root.winfo_rooty() + 80, ref=self.root)
 
     def _confirm_discard_changes(self):
         if not self.dirty:
@@ -2021,6 +2753,8 @@ class DlgEditorApp:
         win.configure(bg=COLOR_BG_APP)
         win.geometry("680x420")
         win.transient(self.root)
+        place_in_view(win, self.root.winfo_rootx() + 60,
+                      self.root.winfo_rooty() + 60, ref=self.root)
 
         frame = ttk.Frame(win, padding=8)
         frame.pack(fill="both", expand=True)
@@ -2054,11 +2788,15 @@ class DlgEditorApp:
         btns = ttk.Frame(frame)
         btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         btns.columnconfigure(0, weight=1)
-        ttk.Button(btns, text=self.t("hist_revert_to"),
-                   command=self._history_revert_clicked).grid(
-                       row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(btns, text=self.t("btn_close"),
-                   command=win.destroy).grid(row=0, column=1)
+        btn_hist_revert = ttk.Button(
+            btns, text=self.t("hist_revert_to"),
+            command=self._history_revert_clicked)
+        btn_hist_revert.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        btn_hist_close = ttk.Button(btns, text=self.t("btn_close"),
+                                    command=win.destroy)
+        btn_hist_close.grid(row=0, column=1)
+        Tooltip(btn_hist_revert, lambda: self.t("hist_revert_to_tip"))
+        Tooltip(btn_hist_close, lambda: self.t("btn_close_tip"))
 
         def _on_close():
             self._history_win = None
@@ -2453,7 +3191,7 @@ class DlgEditorApp:
     def _draw_element(self, el):
         x1, y1, x2, y2 = el.x1, el.y1, el.x2, el.y2
         kind = el.kind
-        if kind in ("BUTTONSD", "TOGGLE", "TOGGLESD"):
+        if kind in ("BUTTON", "BUTTONSD", "TOGGLE", "TOGGLESD"):
             rect = self.canvas.create_rectangle(
                 x1, y1, x2, y2, outline=COLOR_BORDER_DARK,
                 fill=COLOR_BUTTON_BG, width=1)
@@ -2869,16 +3607,19 @@ class LayerDialog:
         btns = ttk.Frame(pad)
         btns.grid(row=len(rows) + 1, column=0, columnspan=2, sticky="e",
                   pady=(12, 0))
-        ttk.Button(btns, text=app.t("btn_ok"), command=self._ok,
-                   style="Save.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(btns, text=app.t("btn_cancel"),
-                   command=win.destroy).pack(side="left")
+        btn_ok = ttk.Button(btns, text=app.t("btn_ok"), command=self._ok,
+                            style="Save.TButton")
+        btn_ok.pack(side="left", padx=(0, 6))
+        btn_cancel = ttk.Button(btns, text=app.t("btn_cancel"),
+                                command=win.destroy)
+        btn_cancel.pack(side="left")
+        Tooltip(btn_ok, lambda: app.t("btn_ok_tip"))
+        Tooltip(btn_cancel, lambda: app.t("btn_cancel_tip"))
 
         win.bind("<Return>", lambda _e: self._ok())
         win.bind("<Escape>", lambda _e: win.destroy())
-        win.update_idletasks()
-        win.geometry(f"+{app.root.winfo_rootx() + 120}"
-                     f"+{app.root.winfo_rooty() + 120}")
+        place_in_view(win, app.root.winfo_rootx() + 120,
+                      app.root.winfo_rooty() + 120, ref=app.root)
         app.root.wait_window(win)
 
     def _ok(self):
@@ -2956,16 +3697,19 @@ class ConfirmDeleteDialog:
 
         btns = ttk.Frame(pad)
         btns.pack(anchor="e", pady=(14, 0))
-        ttk.Button(btns, text=app.t("btn_ok"), command=_ok,
-                   style="Revert.TButton").pack(side="left", padx=(0, 6))
-        ttk.Button(btns, text=app.t("btn_cancel"),
-                   command=win.destroy).pack(side="left")
+        btn_del_ok = ttk.Button(btns, text=app.t("btn_ok"), command=_ok,
+                                style="Revert.TButton")
+        btn_del_ok.pack(side="left", padx=(0, 6))
+        btn_del_cancel = ttk.Button(btns, text=app.t("btn_cancel"),
+                                    command=win.destroy)
+        btn_del_cancel.pack(side="left")
+        Tooltip(btn_del_ok, lambda: app.t("btn_delete_ok_tip"))
+        Tooltip(btn_del_cancel, lambda: app.t("btn_cancel_tip"))
 
         win.bind("<Return>", lambda _e: _ok())
         win.bind("<Escape>", lambda _e: win.destroy())
-        win.update_idletasks()
-        win.geometry(f"+{app.root.winfo_rootx() + 160}"
-                     f"+{app.root.winfo_rooty() + 160}")
+        place_in_view(win, app.root.winfo_rootx() + 160,
+                      app.root.winfo_rooty() + 160, ref=app.root)
         app.root.wait_window(win)
 
 

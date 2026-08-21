@@ -24,13 +24,13 @@ VIDEO
 <details>
  <summary> РУССКИЙ </summary>
  
-▸ ВАРИАНТ А — ЗАПУСК ГОТОВОГО EXE (без установки Python)
+▸ **ВАРИАНТ А — ЗАПУСК ГОТОВОГО EXE (без установки Python)**
 
   Если у вас есть готовый файл DLG Editor for Disciples.exe, просто запустите его двойным
   кликом. Никаких дополнительных действий не требуется.
-
-
-▸ ВАРИАНТ Б — ЗАПУСК СКРИПТА НА PYTHON
+<br>
+<br>
+▸ **ВАРИАНТ Б — ЗАПУСК СКРИПТА НА PYTHON**
 
   1. Скачайте Python с официального сайта:
      https://www.python.org/downloads/
@@ -45,9 +45,10 @@ VIDEO
 
   4. Введите команду:
      python dlg_editor_for_disciples.py
+<br>
+<br>
 
-
-▸ ВАРИАНТ В — СБОРКА В EXE
+▸ **ВАРИАНТ В — СБОРКА В EXE**
 
   1. Установите Python (см. выше).
 
@@ -65,18 +66,20 @@ VIDEO
 
   6. Готовый DLG Editor for Disciples.exe будет в папке dist\.
      Папки build\ и файл DLG Editor for Disciples.spec можно удалить.
-  
+<br>
+<br>  
 </details>  
 <details>  
  <summary>ENGLISH</summary>
 
-▸ OPTION A — RUNNING THE READY-MADE EXE (no Python needed)
+▸ **OPTION A — RUNNING THE READY-MADE EXE (no Python needed)**
 
   If you have the DLG Editor for Disciples.exe file, just double-click it to run.
   No additional installation is required.
+<br>
+<br>
 
-
-▸ OPTION B — RUNNING THE PYTHON SCRIPT
+▸ **OPTION B — RUNNING THE PYTHON SCRIPT**
 
   1. Download Python from the official website:
      https://www.python.org/downloads/
@@ -91,9 +94,10 @@ VIDEO
 
   4. Type the command:
      python dlg_editor_for_disciples.py
+<br>
+<br>
 
-
-▸ OPTION C — BUILDING AN EXE
+▸ **OPTION C — BUILDING AN EXE**
 
   1. Install Python (see above).
 
@@ -110,20 +114,21 @@ VIDEO
 
   6. The resulting DLG Editor for Disciples.exe will be in the dist\ folder.
      The build\ folder and DLG Editor for Disciples.spec file can be deleted.
-  
+<br>
+<br>  
 </details>    
 <details>
 <summary>POLSKI</summary>
 
 
-▸ OPCJA A — URUCHOMIENIE GOTOWEGO PLIKU EXE (bez instalacji Pythona)
+▸ **OPCJA A — URUCHOMIENIE GOTOWEGO PLIKU EXE (bez instalacji Pythona)**
 
   Jeśli posiadasz plik DLG Editor for Disciples.exe, po prostu kliknij go dwukrotnie.
   Nie jest wymagana żadna dodatkowa instalacja.
+<br>
+<br>
 
-
-
-▸ OPCJA B — URUCHOMIENIE SKRYPTU PYTHON
+▸ **OPCJA B — URUCHOMIENIE SKRYPTU PYTHON**
 
   1. Pobierz Pythona z oficjalnej strony:
      https://www.python.org/downloads/
@@ -139,9 +144,10 @@ VIDEO
 
   4. Wpisz polecenie:
      python dlg_editor_for_disciples.py
+<br>
+<br>
 
-
-▸ OPCJA C — KOMPILACJA DO EXE
+▸ **OPCJA C — KOMPILACJA DO EXE**
 
   1. Zainstaluj Pythona (patrz wyżej).
 
@@ -159,21 +165,22 @@ VIDEO
 
   6. Gotowy plik DLG Editor for Disciples.exe znajdziesz w folderze dist\.
      Foldery build\ oraz plik DLG Editor for Disciples.spec można usunąć.
-
-  
+<br>
+<br> 
 
 </details>  
 <details>  
 <summary>简体中文</summary>
 
 
-▸ 方案 A — 运行现成的 EXE 文件（无需安装 Python）
+▸ **方案 A — 运行现成的 EXE 文件（无需安装 Python）**
 
   如果您已有 DLG Editor for Disciples.exe 文件，双击即可运行。
   无需任何额外安装。
+<br>
+<br>
 
-
-▸ 方案 B — 运行 Python 脚本
+▸ **方案 B — 运行 Python 脚本**
 
   1. 从官方网站下载 Python：
      https://www.python.org/downloads/
@@ -188,9 +195,10 @@ VIDEO
 
   4. 输入命令：
      python dlg_editor_for_disciples.py
+<br>
+<br>
 
-
-▸ 方案 C — 编译为 EXE
+▸ **方案 C — 编译为 EXE**
 
   1. 安装 Python（参见上文）。
 
@@ -209,8 +217,7 @@ VIDEO
   6. 生成的 DLG Editor for Disciples.exe 将位于 dist\ 文件夹中。
      build\ 文件夹和 DLG Editor for Disciples.spec 文件可以删除。
 </details> 
-
-
+<br>
     
 **ScenEdit.dlg**  
 <img width="1365" height="730" alt="image" src="https://github.com/user-attachments/assets/1bd996cf-e3ea-432c-be1e-e389a2b9a4fe" />
