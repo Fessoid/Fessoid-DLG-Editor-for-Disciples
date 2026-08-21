@@ -1,8 +1,8 @@
-# Fessoid Interface DLG Editor for Disciples [![Скачать](https://img.shields.io/github/v/release/Fessoid/DLG-Editor-for-Disciples?color=orange)](https://github.com/Fessoid/DLG-Editor-for-Disciples/releases)  [RU/ENG/PL/CN]
+# Fessoid Interface DLG Editor for Disciples [![Скачать](https://img.shields.io/github/v/release/Fessoid/Fessoid-DLG-Editor-for-Disciples?color=orange)](https://github.com/Fessoid/Fessoid-DLG-Editor-for-Disciples/releases)  [RU/ENG/PL/CN]
 **Редактор интерфейса для Disciples 1 and 2 by Fessoid**  
 **Interface editor for Disciples 1 and 2**
   
-[Патчноут/Changelog/Dziennik zmian/更新日志](https://github.com/Fessoid/DLG-Editor-for-Disciples/blob/main/CHANGELOG.md)
+[Патчноут/Changelog/Dziennik zmian/更新日志](https://github.com/Fessoid/Fessoid-DLG-Editor-for-Disciples/blob/main/CHANGELOG.md)
 <br>  
 Разработал программу для самостоятельного изменения интерфейса игр Disciples (1 и 2 части).  
 
@@ -24,7 +24,7 @@ VIDEO
  
 ▸ **ВАРИАНТ А — ЗАПУСК ГОТОВОГО EXE (без установки Python)**
 
-  Если у вас есть готовый файл DLG Editor for Disciples.exe, просто запустите его двойным
+  Если у вас есть готовый exe-файл программы, просто запустите его двойным
   кликом. Никаких дополнительных действий не требуется.
 <br>
 <br>
@@ -37,12 +37,12 @@ VIDEO
      ☑ «Add Python to PATH»
      Затем нажмите «Install Now».
 
-  3. Откройте папку, где лежит файл dlg_editor_for_disciples.py.
+  3. Откройте папку, где лежит файл fessoid_dlg_editor_for_disciples.py.
      Зажмите Shift и кликните правой кнопкой мыши по пустому месту в папке.
      Выберите «Открыть окно PowerShell здесь» (или «Открыть командную строку»).
 
   4. Введите команду:
-     python dlg_editor_for_disciples.py
+     python fessoid_dlg_editor_for_disciples.py
 <br>
 <br>
 
@@ -58,12 +58,16 @@ VIDEO
   4. Перейдите в папку со скриптом:
      cd C:\путь\к\папке\со\скриптом
 
-  5. Запустите сборку:
-     pyinstaller --onefile --windowed --name "DLG Editor for Disciples" dlg_editor_for_disciples.py
+  5. Запустите сборку в PowerShell. Версия подставится в имя файла сама:
+     $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
+           -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
+     pyinstaller --onefile --windowed `
+         --name "Fessoid DLG Editor for Disciples v$v" `
+         fessoid_dlg_editor_for_disciples.py
 
 
-  6. Готовый DLG Editor for Disciples.exe будет в папке dist\.
-     Папки build\ и файл DLG Editor for Disciples.spec можно удалить.
+  6. Готовый exe с номером версии в имени появится в папке dist\.
+     Папку build\ и файл .spec можно удалить.
 <br>
 <br>  
 </details>  
@@ -72,7 +76,7 @@ VIDEO
 
 ▸ **OPTION A — RUNNING THE READY-MADE EXE (no Python needed)**
 
-  If you have the DLG Editor for Disciples.exe file, just double-click it to run.
+  If you have the program's exe file, just double-click it to run.
   No additional installation is required.
 <br>
 <br>
@@ -86,12 +90,12 @@ VIDEO
      ☑ "Add Python to PATH"
      Then click "Install Now".
 
-  3. Open the folder containing dlg_editor_for_disciples.py.
+  3. Open the folder containing fessoid_dlg_editor_for_disciples.py.
      Hold Shift and right-click on an empty area in the folder.
      Select "Open PowerShell window here" (or "Open command window here").
 
   4. Type the command:
-     python dlg_editor_for_disciples.py
+     python fessoid_dlg_editor_for_disciples.py
 <br>
 <br>
 
@@ -107,11 +111,15 @@ VIDEO
   4. Navigate to the script folder:
      cd C:\path\to\script\folder
 
-  5. Build the executable:
-     pyinstaller --onefile --windowed --name "DLG Editor for Disciples" dlg_editor_for_disciples.py
+  5. Build it in PowerShell. The version is put into the file name automatically:
+     $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
+           -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
+     pyinstaller --onefile --windowed `
+         --name "Fessoid DLG Editor for Disciples v$v" `
+         fessoid_dlg_editor_for_disciples.py
 
-  6. The resulting DLG Editor for Disciples.exe will be in the dist\ folder.
-     The build\ folder and DLG Editor for Disciples.spec file can be deleted.
+  6. The resulting exe, with the version in its name, appears in the dist\ folder.
+     The build\ folder and the .spec file can be deleted.
 <br>
 <br>  
 </details>    
@@ -121,7 +129,7 @@ VIDEO
 
 ▸ **OPCJA A — URUCHOMIENIE GOTOWEGO PLIKU EXE (bez instalacji Pythona)**
 
-  Jeśli posiadasz plik DLG Editor for Disciples.exe, po prostu kliknij go dwukrotnie.
+  Jeśli posiadasz plik exe programu, po prostu kliknij go dwukrotnie.
   Nie jest wymagana żadna dodatkowa instalacja.
 <br>
 <br>
@@ -135,13 +143,13 @@ VIDEO
      ☑ „Add Python to PATH"
      Następnie kliknij „Install Now".
 
-  3. Otwórz folder zawierający plik dlg_editor_for_disciples.py.
+  3. Otwórz folder zawierający plik fessoid_dlg_editor_for_disciples.py.
      Przytrzymaj Shift i kliknij prawym przyciskiem myszy na pustym obszarze.
      Wybierz „Otwórz okno programu PowerShell tutaj"
      (lub „Otwórz okno polecenia tutaj").
 
   4. Wpisz polecenie:
-     python dlg_editor_for_disciples.py
+     python fessoid_dlg_editor_for_disciples.py
 <br>
 <br>
 
@@ -157,12 +165,16 @@ VIDEO
   4. Przejdź do folderu ze skryptem:
      cd C:\ścieżka\do\folderu\ze\skryptem
 
-  5. Uruchom kompilację:
-     pyinstaller --onefile --windowed --name "DLG Editor for Disciples" dlg_editor_for_disciples.py
+  5. Uruchom kompilację w PowerShell. Wersja trafi do nazwy pliku automatycznie:
+     $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
+           -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
+     pyinstaller --onefile --windowed `
+         --name "Fessoid DLG Editor for Disciples v$v" `
+         fessoid_dlg_editor_for_disciples.py
 
 
-  6. Gotowy plik DLG Editor for Disciples.exe znajdziesz w folderze dist\.
-     Foldery build\ oraz plik DLG Editor for Disciples.spec można usunąć.
+  6. Gotowy plik exe z numerem wersji w nazwie znajdziesz w folderze dist\.
+     Folder build\ oraz plik .spec można usunąć.
 <br>
 <br> 
 
@@ -173,7 +185,7 @@ VIDEO
 
 ▸ **方案 A — 运行现成的 EXE 文件（无需安装 Python）**
 
-  如果您已有 DLG Editor for Disciples.exe 文件，双击即可运行。
+  如果您已有本程序的 exe 文件，双击即可运行。
   无需任何额外安装。
 <br>
 <br>
@@ -187,12 +199,12 @@ VIDEO
      ☑「Add Python to PATH」
      然后点击「Install Now」。
 
-  3. 打开 dlg_editor_for_disciples.py 所在的文件夹。
+  3. 打开 fessoid_dlg_editor_for_disciples.py 所在的文件夹。
      按住 Shift 键，在文件夹空白处右键单击。
      选择「在此处打开 PowerShell 窗口」（或「在此处打开命令窗口」）。
 
   4. 输入命令：
-     python dlg_editor_for_disciples.py
+     python fessoid_dlg_editor_for_disciples.py
 <br>
 <br>
 
@@ -208,12 +220,16 @@ VIDEO
   4. 切换到脚本所在文件夹：
      cd C:\脚本文件夹路径
 
-  5. 运行编译命令：
-     pyinstaller --onefile --windowed --name "DLG Editor for Disciples" dlg_editor_for_disciples.py
+  5. 在 PowerShell 中运行编译命令，版本号会自动写入文件名：
+     $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
+           -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
+     pyinstaller --onefile --windowed `
+         --name "Fessoid DLG Editor for Disciples v$v" `
+         fessoid_dlg_editor_for_disciples.py
 
 
-  6. 生成的 DLG Editor for Disciples.exe 将位于 dist\ 文件夹中。
-     build\ 文件夹和 DLG Editor for Disciples.spec 文件可以删除。
+  6. 生成的 exe（文件名中带版本号）将位于 dist\ 文件夹中。
+     build\ 文件夹和 .spec 文件可以删除。
 </details> 
 <br>
     

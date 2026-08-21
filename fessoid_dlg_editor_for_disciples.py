@@ -1,11 +1,15 @@
 """
-DLG Editor for Disciples by Fessoid — визуальный редактор .dlg и Capital.dat.
+Fessoid DLG Editor for Disciples — визуальный редактор .dlg и Capital.dat.
 
 Запуск:
-    python dlg_editor_for_disciples.py [путь_к_файлу.dlg|.dat]
+    python fessoid_dlg_editor_for_disciples.py [путь_к_файлу.dlg|.dat]
 
-Сборка:
-    pyinstaller --onefile --windowed --name "DLG Editor for Disciples" dlg_editor_for_disciples.py
+Сборка (версия в имени exe подставляется из APP_VERSION, PowerShell):
+    $v = (Select-String -Path fessoid_dlg_editor_for_disciples.py `
+          -Pattern '^APP_VERSION = "(.+)"').Matches.Groups[1].Value
+    pyinstaller --onefile --windowed `
+        --name "Fessoid DLG Editor for Disciples v$v" `
+        fessoid_dlg_editor_for_disciples.py
 """
 
 import configparser
@@ -22,14 +26,27 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 # Название и версия программы — единственное место, где они задаются.
-APP_T = "DLG Editor for Disciples by Fessoid v"
+APP_T = "Fessoid DLG Editor for Disciples v"
 APP_VERSION = "1.3"
 APP_TITLE = APP_T + APP_VERSION
 
 # Папка программы — рядом с exe / скриптом. Туда же кладётся файл настроек
 # и скачивается новая версия при обновлении.
 APP_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
-SETTINGS_PATH = os.path.join(APP_DIR, "DLG_Editor_settings.ini")
+SETTINGS_PATH = os.path.join(APP_DIR, "Fessoid_DLG_Editor_settings.ini")
+# До версии 1.3 файл настроек назывался иначе. Переносим его один раз, чтобы
+# у тех, кто уже пользуется программой, не пропали язык, последний открытый
+# файл и отметка об отказе от обновления.
+OLD_SETTINGS_PATH = os.path.join(APP_DIR, "DLG_Editor_settings.ini")
+
+
+def migrate_settings():
+    if os.path.exists(SETTINGS_PATH) or not os.path.exists(OLD_SETTINGS_PATH):
+        return
+    try:
+        os.replace(OLD_SETTINGS_PATH, SETTINGS_PATH)
+    except OSError:
+        pass    # не вышло — программа просто начнёт с настроек по умолчанию
 
 # --- Проверка обновлений -----------------------------------------------------
 # Репозиторий публичный, поэтому запрос к API GitHub идёт без авторизации:
@@ -1551,6 +1568,7 @@ class DlgEditorApp:
         self.skipped_version = ""
         self._update_busy = False
 
+        migrate_settings()
         # Загружаем настройки до построения UI, чтобы язык был сразу верным.
         (saved_lang, saved_file, saved_maximized, saved_section,
          saved_dat_secondary, saved_skipped) = self._load_settings()

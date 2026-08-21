@@ -3,6 +3,7 @@ references/
 *.rar
 
 # Локальные настройки: содержат путь к последнему открытому файлу.
+Fessoid_DLG_Editor_settings.ini
 DLG_Editor_settings.ini
 
 # Сборка PyInstaller.
