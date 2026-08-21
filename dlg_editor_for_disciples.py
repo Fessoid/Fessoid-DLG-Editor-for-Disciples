@@ -1421,6 +1421,9 @@ def menu_font():
     шрифту: место выделяется под 48 пикселей, рисуется вдвое шире, и от
     «简体中文» видно один иероглиф. Со шрифтом, где глифы свои, подстановки
     не происходит и обрезать нечего.
+
+    Начертание берём обычное, а не как у TkMenuFont: на части систем он
+    объявлен жирным, и в другом семействе это выглядит тяжело.
     """
     base = tkfont.nametofont("TkMenuFont")
     families = set(tkfont.families())
@@ -1429,7 +1432,7 @@ def menu_font():
                  "Noto Sans CJK SC", "WenQuanYi Micro Hei"):  # Linux
         if name in families:
             return tkfont.Font(family=name, size=base.actual("size"),
-                               weight=base.actual("weight"))
+                               weight="normal")
     return base
 
 
@@ -1769,7 +1772,7 @@ class DlgEditorApp:
         self.section_listbox.bind("<<ListboxSelect>>", self._on_section_select)
 
         # Копирование имени секции: Ctrl+C и контекстное меню.
-        self.section_menu = tk.Menu(self.root, tearoff=0, font=self.menu_font)
+        self.section_menu = tk.Menu(self.root, tearoff=0)
         # Ctrl+C обрабатывается общим обработчиком _on_control_key.
         self.section_listbox.bind("<Button-3>", self._on_section_right_click)
 
@@ -1878,7 +1881,7 @@ class DlgEditorApp:
         self.element_tree.bind("<Double-1>", lambda _e: self.cmd_layer_edit())
 
         # Копирование имени элемента/слоя: Ctrl+C и контекстное меню.
-        self.element_menu = tk.Menu(self.root, tearoff=0, font=self.menu_font)
+        self.element_menu = tk.Menu(self.root, tearoff=0)
         # Ctrl+C обрабатывается общим обработчиком _on_control_key.
         self.element_tree.bind("<Button-3>", self._on_element_right_click)
 
@@ -2095,9 +2098,9 @@ class DlgEditorApp:
 
     def _build_menu(self):
         # Меню пересоздаётся целиком: entryconfigure -label не работает на Windows Tk.
-        menubar = tk.Menu(self.root, font=self.menu_font)
+        menubar = tk.Menu(self.root)
 
-        filemenu = tk.Menu(menubar, tearoff=0, font=self.menu_font)
+        filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label=self.t("menu_open"), command=self.cmd_open,
                              accelerator="Ctrl+O")
         filemenu.add_command(label=self.t("menu_save"), command=self.cmd_save,
@@ -2108,7 +2111,7 @@ class DlgEditorApp:
         filemenu.add_command(label=self.t("menu_exit"), command=self.cmd_exit)
         menubar.add_cascade(label=self.t("menu_file"), menu=filemenu)
 
-        editmenu = tk.Menu(menubar, tearoff=0, font=self.menu_font)
+        editmenu = tk.Menu(menubar, tearoff=0)
         editmenu.add_command(label=self.t("menu_undo"), command=self.cmd_undo,
                              accelerator="Ctrl+Z")
         editmenu.add_command(label=self.t("menu_redo"), command=self.cmd_redo,
@@ -2119,13 +2122,15 @@ class DlgEditorApp:
                              accelerator="Ctrl+H")
         menubar.add_cascade(label=self.t("menu_edit"), menu=editmenu)
 
-        setmenu = tk.Menu(menubar, tearoff=0, font=self.menu_font)
+        setmenu = tk.Menu(menubar, tearoff=0)
         self.dat_secondary_var = tk.BooleanVar(value=self.dat_secondary)
         setmenu.add_checkbutton(label=self.t("menu_dat_secondary"),
                                 variable=self.dat_secondary_var,
                                 command=self._toggle_dat_secondary)
         menubar.add_cascade(label=self.t("menu_settings"), menu=setmenu)
 
+        # Шрифт со своими иероглифами нужен только здесь: в этом списке всегда
+        # есть «简体中文». Остальные меню остаются на системном шрифте.
         langmenu = tk.Menu(menubar, tearoff=0, font=self.menu_font)
         self.lang_var.set(self.lang)
         for code in ("ru", "en", "pl", "zh"):
